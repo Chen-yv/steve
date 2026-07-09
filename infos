@@ -1,0 +1,191 @@
+# SteVe Project Information
+
+================================================================================
+## 修改内容
+================================================================================
+
+新建了 2 个文件：
+1. /home/zcl/injet/steve/CLAUDE.md - 项目指导文件
+2. /home/zcl/injet/steve/infos - 本文件
+
+没有修改任何现有文件。
+
+================================================================================
+## 配置文件位置
+================================================================================
+
+配置文件在 src/main/resources/ 目录下：
+
+| 文件                                   | 用途                 |
+|----------------------------------------|----------------------|
+| application.yml                        | Spring Boot 主配置   |
+| application-prod.properties            | 生产环境配置         |
+| application-dev.properties             | 开发环境配置         |
+| application-docker.properties          | Docker 环境配置      |
+| application-kubernetes.properties      | Kubernetes 配置      |
+| application-test.properties            | 测试环境配置         |
+
+================================================================================
+## 主要配置项
+================================================================================
+
+### 1. 数据库配置 (application-prod.properties)
+```properties
+db.ip = localhost
+db.port = 3306
+db.schema = stevedb
+db.user = steve
+db.password = changeme
+```
+
+### 2. Web 管理界面认证
+```properties
+auth.user = admin
+auth.password = 1234
+```
+
+### 3. Web API 认证
+```properties
+webapi.key = STEVE-API-KEY
+webapi.value =
+```
+
+### 4. HTTP/HTTPS 配置
+```properties
+server.host = 0.0.0.0
+http.enabled = true
+http.port = 1234
+https.enabled = false
+https.port = 8443
+```
+
+### 5. OCPP 协议启用 (application.yml)
+```yaml
+enabled-protocols:
+  v12: { soap: true, json: true }
+  v15: { soap: true, json: true }
+  v16: { soap: true, json: true }
+```
+
+### 6. 安全相关
+```properties
+ws.session.select.strategy = ALWAYS_LAST
+auto.register.unknown.stations = false
+```
+
+### 7. Docker 环境差异
+- db.ip = mariadb (而非 localhost)
+- http.port = 8180 (而非 1234)
+- server.gzip.enabled = false
+
+================================================================================
+## Project Overview
+- **Name**: SteVe (SteckdosenVerwaltung)
+- **Description**: Open-source OCPP (Open Charge Point Protocol) server for managing electric vehicle charging stations
+- **Version**: 3.14.0-SNAPSHOT
+- **Location**: /home/zcl/injet/steve
+- **Git**: Yes, git repository
+
+## Tech Stack
+- Java 21+ (Spring Boot 4.0.6)
+- Maven build system
+- MySQL or MariaDB database
+- jOOQ for database access (NOT JPA/Hibernate)
+- Apache CXF 4.2.0 for SOAP services
+- WebSocket for OCPP JSON transport
+
+## Build Commands
+```bash
+# Build for production (MySQL, skips tests by default)
+./mvnw package -Pprod,mysql
+
+# Build for production (MariaDB)
+./mvnw package -Pprod,mariadb
+
+# Build and run tests (requires running database)
+./mvnw -Ptest,mysql clean package
+
+# Run the application
+java -jar target/steve.war
+
+# Run with specific profile
+java -jar target/steve.war --spring.profiles.active=dev
+```
+
+## Directory Structure
+```
+src/main/java/de/rwth/idsg/steve/
+├── config/              # Configuration classes
+├── ocpp/                # OCPP protocol layer
+│   ├── converter/        # Message converters
+│   ├── model/           # OCPP model classes
+│   ├── soap/            # SOAP service implementations
+│   ├── task/            # Communication tasks
+│   └── ws/              # WebSocket implementation
+│       ├── ocpp12/      # OCPP 1.2 handlers
+│       ├── ocpp15/      # OCPP 1.5 handlers
+│       ├── ocpp16/      # OCPP 1.6 handlers
+│       ├── pipeline/    # Message processing pipeline
+│       └── data/        # WebSocket data stores
+├── repository/          # Data access layer (jOOQ)
+│   ├── impl/            # Repository implementations
+│   └── dto/             # Data transfer objects
+├── service/             # Business logic services
+├── web/                 # Web layer
+│   ├── api/             # REST APIs at /api
+│   ├── controller/      # Thymeleaf controllers at /manager
+│   ├── dto/             # Request/response DTOs
+│   └── validation/      # Custom validators
+└── utils/               # Utility classes
+```
+
+## Key Architecture Patterns
+1. **Repository Pattern**: Interface + impl pattern (e.g., ChargePointRepository / ChargePointRepositoryImpl)
+2. **jOOQ**: Type-safe SQL queries, not JPA/Hibernate
+3. **OCPP Transport Abstraction**: OcppTransport enum (SOAP, JSON)
+4. **CommunicationTask Hierarchy**: Manages async charge point operations
+
+## OCPP Support
+- OCPP 1.2S (SOAP)
+- OCPP 1.2J (JSON/WebSocket)
+- OCPP 1.5S (SOAP)
+- OCPP 1.5J (JSON/WebSocket)
+- OCPP 1.6S (SOAP)
+- OCPP 1.6J (JSON/WebSocket) with Security Extensions
+
+## Web Endpoints
+- Manager UI: http://host:port/steve/manager
+- SOAP: http://host:port/steve/services/CentralSystemService
+- WebSocket/JSON: ws://host:port/steve/websocket/CentralSystemService
+- REST API: http://host:port/steve/api
+
+## Configuration Files
+- application.yml: Main Spring Boot config
+- application-{profile}.properties: Environment-specific (prod, dev, docker, test, kubernetes)
+- SteveProperties.java: Type-safe configuration binding
+- checkstyle.xml: 120 char line limit, no tabs, no trailing spaces
+
+## License
+- GPL (GNU General Public License)
+- All Java files must include GPL license header
+
+## Testing
+- Integration tests (*IT suffix) require running MySQL/MariaDB
+- Unit tests can run without database
+- Test database setup in CI workflow (.github/workflows/main.yml)
+
+## Docker
+```bash
+docker compose up -d
+```
+Uses application-docker.properties. Web UI at http://localhost:8180/steve/manager
+
+## Database
+- MySQL 8.0, 8.4 supported
+- MariaDB 10.6, 10.11, 11.4, 11.8 supported
+- Time zone must be UTC
+- Database name: stevedb
+- Default user: steve / changeme
+
+## Files Count
+- Total Java source files: 338
