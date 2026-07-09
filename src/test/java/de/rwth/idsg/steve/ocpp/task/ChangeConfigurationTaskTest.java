@@ -47,7 +47,6 @@ public class ChangeConfigurationTaskTest {
     @Test
     public void testAuthorizationKey() {
         String plainText = "OCA_OCTT_admin_test";
-        String hex = "4F43415F4F4354545F61646D696E5F74657374";
 
         ChangeConfigurationParams params = new ChangeConfigurationParams();
         params.setKeyType(ConfigurationKeyType.PREDEFINED);
@@ -58,6 +57,6 @@ public class ChangeConfigurationTaskTest {
         ChangeConfigurationRequest request = task.getOcpp16Request();
 
         Assertions.assertEquals(ConfigurationKeyEnum.AuthorizationKey.name(), request.getKey());
-        Assertions.assertTrue(hex.equalsIgnoreCase(request.getValue()));
+        Assertions.assertEquals(plainText, request.getValue());
     }
 }

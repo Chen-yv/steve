@@ -25,8 +25,6 @@ import de.rwth.idsg.steve.web.dto.ocpp.ChangeConfigurationParams;
 import ocpp.cp._2015._10.ConfigurationStatus;
 
 import jakarta.xml.ws.AsyncHandler;
-import java.nio.charset.StandardCharsets;
-import java.util.HexFormat;
 
 import static de.rwth.idsg.steve.web.dto.ocpp.ConfigurationKeyEnum.AuthorizationKey;
 import static de.rwth.idsg.steve.web.dto.ocpp.ConfigurationKeyEnum.SecurityProfile;
@@ -71,16 +69,9 @@ public class ChangeConfigurationTask extends CommunicationTask<ChangeConfigurati
 
     @Override
     public ocpp.cp._2015._10.ChangeConfigurationRequest getOcpp16Request() {
-        String value = params.getValue();
-
-        // https://github.com/steve-community/steve/issues/1895
-        if (AuthorizationKey.name().equals(params.getKey())) {
-            value = HexFormat.of().formatHex(value.getBytes(StandardCharsets.UTF_8));
-        }
-
         return new ocpp.cp._2015._10.ChangeConfigurationRequest()
                 .withKey(params.getKey())
-                .withValue(value);
+                .withValue(params.getValue());
     }
 
     @Override

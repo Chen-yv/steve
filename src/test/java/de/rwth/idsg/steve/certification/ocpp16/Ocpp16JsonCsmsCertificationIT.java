@@ -109,8 +109,6 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 
@@ -2278,12 +2276,10 @@ public class Ocpp16JsonCsmsCertificationIT extends AbstractOcpp16JsonCsms {
         params.setConfKey(AuthorizationKey.name());
         params.setValue(newPassword);
 
-        var valueHex = HexFormat.of().formatHex(params.getValue().getBytes(StandardCharsets.UTF_8));
-
         var future = supplyAsyncUnchecked(() -> operationsService.changeConfiguration(params));
 
         chargePoint.expectRequest(
-            new ChangeConfigurationRequest().withKey(AuthorizationKey.name()).withValue(valueHex),
+            new ChangeConfigurationRequest().withKey(AuthorizationKey.name()).withValue(newPassword),
             new ChangeConfigurationResponse().withStatus(ConfigurationStatus.ACCEPTED)
         );
         assertEquals(ConfigurationStatus.ACCEPTED, successResponse(future.join()));
