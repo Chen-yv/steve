@@ -26,7 +26,6 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.ToString;
 import ocpp.cs._2015._10.RegistrationStatus;
-import org.hibernate.validator.constraints.Length;
 import org.hibernate.validator.constraints.URL;
 
 import jakarta.validation.Valid;
@@ -80,7 +79,6 @@ public class ChargePointFormForCreate {
      * encoded password value, and sends it to repository layer.
      */
     @Schema(accessMode = Schema.AccessMode.WRITE_ONLY)
-    @Length(min = 16, max = 20, message = "The field must be between {min} and {max} characters")
     private String authPassword;
 
     @Schema(accessMode = Schema.AccessMode.READ_ONLY)

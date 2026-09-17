@@ -25,6 +25,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.joda.time.DateTime;
 import org.joda.time.LocalDate;
 import org.springframework.beans.propertyeditors.StringTrimmerEditor;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.WebDataBinder;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -34,6 +36,7 @@ import org.springframework.web.servlet.ModelAndView;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * @author Sevket Goekay <sevketgokay@gmail.com>
@@ -65,6 +68,26 @@ public class GlobalControllerAdvice {
 
         ModelAndView mav = new ModelAndView();
         mav.addObject("exception", exception);
+        mav.setViewName("00-error");
+        return mav;
+    }
+
+    /**
+     * Handles binding/validation errors (e.g., when a non-numeric value like a MAC address
+     * "00:00:01:00:00:01" is entered for an Integer field such as userId). Shows a clear,
+     * user-friendly error message instead of the raw exception.
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ModelAndView handleMethodArgumentNotValid(HttpServletRequest req, MethodArgumentNotValidException exception) {
+        log.warn("Request: {} raised a validation exception.", req.getRequestURL(), exception);
+
+        List<FieldError> fieldErrors = exception.getBindingResult().getFieldErrors();
+        String message = fieldErrors.stream()
+            .map(fe -> "Invalid value for '" + fe.getField() + "': " + fe.getRejectedValue())
+            .collect(Collectors.joining("; "));
+
+        ModelAndView mav = new ModelAndView();
+        mav.addObject("exception", new RuntimeException(message.isEmpty() ? "Invalid input" : message));
         mav.setViewName("00-error");
         return mav;
     }

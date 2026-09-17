@@ -20,19 +20,11 @@ package de.rwth.idsg.steve.ocpp.ws.custom;
 
 import org.owasp.encoder.Encode;
 import tools.jackson.core.JacksonException;
-import tools.jackson.core.JsonGenerator;
 import tools.jackson.core.JsonParser;
 import tools.jackson.core.Version;
-import tools.jackson.databind.DatabindException;
 import tools.jackson.databind.DeserializationContext;
-import tools.jackson.databind.JavaType;
-import tools.jackson.databind.SerializationContext;
 import tools.jackson.databind.deser.jdk.StringDeserializer;
-import tools.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrapper;
-import tools.jackson.databind.jsontype.TypeSerializer;
 import tools.jackson.databind.module.SimpleModule;
-import tools.jackson.databind.ser.jdk.StringSerializer;
-import tools.jackson.databind.ser.std.StdScalarSerializer;
 
 /**
  * @author Sevket Goekay <sevketgokay@gmail.com>
@@ -43,44 +35,9 @@ public class CustomStringModule extends SimpleModule {
     public CustomStringModule() {
         super("CustomStringModule", new Version(0, 0, 1, null, "de.rwth.idsg", "steve"));
 
-        super.addSerializer(String.class, new CustomStringSerializer());
+        // Only escape incoming strings as XSS defense-in-depth. Outgoing strings must be
+        // sent as-is, because escaping corrupts protocol payloads (e.g. JSON in DataTransfer).
         super.addDeserializer(String.class, new CustomStringDeserializer());
-    }
-
-    /**
-     * Since {@link StringSerializer} is marked as final, its contents are copied here (and adjusted as needed).
-     */
-    private static class CustomStringSerializer extends StdScalarSerializer<Object> {
-
-        public CustomStringSerializer() {
-            super(String.class, false);
-        }
-
-        @Override
-        public boolean isEmpty(SerializationContext prov, Object value) {
-            String str = (String) value;
-            return str.isEmpty();
-        }
-
-        @Override
-        public void serialize(Object value, JsonGenerator gen, SerializationContext provider) throws JacksonException {
-            gen.writeString(objectToString(value));
-        }
-
-        @Override
-        public final void serializeWithType(Object value, JsonGenerator gen, SerializationContext provider,
-                                            TypeSerializer typeSer) throws JacksonException {
-            gen.writeString(objectToString(value));
-        }
-
-        @Override
-        public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint) throws DatabindException {
-            visitStringFormat(visitor, typeHint);
-        }
-
-        private static String objectToString(Object value) {
-            return Encode.forHtml((String) value);
-        }
     }
 
     private static class CustomStringDeserializer extends StringDeserializer {

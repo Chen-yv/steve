@@ -20,7 +20,9 @@ package de.rwth.idsg.steve.ocpp.ws.custom;
 
 import tools.jackson.databind.ObjectMapper;
 import de.rwth.idsg.steve.ocpp.ws.JsonObjectMapper;
+import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -41,20 +43,31 @@ public class CustomStringModuleTest {
 
     @Test
     public void testLink() throws Exception {
+        // outgoing strings must not be escaped, otherwise payloads like JSON in DataTransfer get corrupted
         SimpleJsonModel input = new SimpleJsonModel("<a href=\"link\">Some link</a>");
         String output = mapper.writeValueAsString(input);
-        Assertions.assertEquals("{\"someText\":\"&lt;a href=&#34;link&#34;&gt;Some link&lt;/a&gt;\"}", output);
+        Assertions.assertEquals("{\"someText\":\"<a href=\\\"link\\\">Some link</a>\"}", output);
     }
 
     @Test
     public void testScript() throws Exception {
         SimpleJsonModel input = new SimpleJsonModel("<script src=\"http://someurl.com/script.js\"/>");
         String output = mapper.writeValueAsString(input);
-        Assertions.assertEquals("{\"someText\":\"&lt;script src=&#34;http://someurl.com/script.js&#34;/&gt;\"}", output);
+        Assertions.assertEquals("{\"someText\":\"<script src=\\\"http://someurl.com/script.js\\\"/>\"}", output);
+    }
+
+    @Test
+    public void testDeserializeEscapes() throws Exception {
+        // incoming strings are still escaped as XSS defense-in-depth
+        String input = "{\"someText\":\"<script src=\\\"http://someurl.com/script.js\\\"/>\"}";
+        SimpleJsonModel output = mapper.readValue(input, SimpleJsonModel.class);
+        Assertions.assertEquals("&lt;script src=&#34;http://someurl.com/script.js&#34;/&gt;", output.getSomeText());
     }
 
     @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
     private static class SimpleJsonModel {
-        private final String someText;
+        private String someText;
     }
 }
