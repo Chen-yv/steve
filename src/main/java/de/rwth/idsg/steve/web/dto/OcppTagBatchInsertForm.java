@@ -24,6 +24,7 @@ import lombok.Setter;
 import lombok.ToString;
 
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 
 /**
@@ -35,7 +36,7 @@ import java.util.List;
 @ToString
 public class OcppTagBatchInsertForm {
 
-    @IdTag
     @NotEmpty
-    private List<String> idList;
+    private List<@IdTag
+                 @Size(min = 1, max = IdTag.MAX_LENGTH) String> idList;
 }

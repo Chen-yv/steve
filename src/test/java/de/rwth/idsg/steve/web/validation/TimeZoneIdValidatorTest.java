@@ -18,32 +18,30 @@
  */
 package de.rwth.idsg.steve.web.validation;
 
-import org.hibernate.validator.internal.constraintvalidators.bv.EmailValidator;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 
-import jakarta.validation.ConstraintValidator;
-import jakarta.validation.ConstraintValidatorContext;
-import java.util.Collection;
+public class TimeZoneIdValidatorTest {
 
-/**
- * @author Sevket Goekay <sevketgokay@gmail.com>
- * @since 22.01.2016
- */
-public class EmailCollectionValidator implements ConstraintValidator<EmailCollection, Collection<String>> {
+    private final TimeZoneIdValidator validator = new TimeZoneIdValidator();
 
-    private static final EmailValidator VALIDATOR = new EmailValidator();
-
-    @Override
-    public void initialize(EmailCollection constraintAnnotation) {
-        // No-op
+    @Test
+    public void nullIsValid() {
+        Assertions.assertTrue(validator.isValid(null, null));
     }
 
-    @Override
-    public boolean isValid(Collection<String> value, ConstraintValidatorContext context) {
-        for (String s : value) {
-            if (!VALIDATOR.isValid(s, context)) {
-                return false;
-            }
-        }
-        return true;
+    @Test
+    public void emptyIsValid() {
+        Assertions.assertTrue(validator.isValid("", null));
+    }
+
+    @Test
+    public void availableZoneIdIsValid() {
+        Assertions.assertTrue(validator.isValid("Europe/Berlin", null));
+    }
+
+    @Test
+    public void unknownZoneIdIsInvalid() {
+        Assertions.assertFalse(validator.isValid("Europe/Not-A-Time-Zone", null));
     }
 }

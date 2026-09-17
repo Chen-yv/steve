@@ -25,8 +25,8 @@ import org.joda.time.DateTime;
 
 import jakarta.validation.constraints.Future;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 /**
  * @author Sevket Goekay <sevketgokay@gmail.com>
@@ -44,8 +44,8 @@ public class ReserveNowParams extends SingleChargePointSelect {
     @Future(message = "Expiry Date/Time must be in future")
     private DateTime expiry;
 
-    @NotBlank(message = "User ID Tag is required.")
     @IdTag
+    @Size(min = 1, max = IdTag.EXTENDED_MAX_LENGTH)
     private String idTag;
 
 }

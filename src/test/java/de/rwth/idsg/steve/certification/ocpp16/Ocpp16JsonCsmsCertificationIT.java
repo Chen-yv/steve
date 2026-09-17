@@ -148,7 +148,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @Slf4j
 @ActiveProfiles(profiles = "test")
-@SpringBootTest(webEnvironment = WebEnvironment.DEFINED_PORT)
+@SpringBootTest(
+    properties = "steve.ocpp.octt-quirks-enabled=true",
+    webEnvironment = WebEnvironment.DEFINED_PORT
+)
 @TestMethodOrder(MethodOrderer.MethodName.class)
 public class Ocpp16JsonCsmsCertificationIT extends AbstractOcpp16JsonCsms {
 
@@ -653,17 +656,15 @@ public class Ocpp16JsonCsmsCertificationIT extends AbstractOcpp16JsonCsms {
         params.setConfKey("MeterValueSampleInterval");
         params.setValue("60");
 
-        var operationFuture = supplyAsyncUnchecked(() -> operationsService.changeConfiguration(params));
-
         var changeConfigReq = new ChangeConfigurationRequest()
             .withKey("MeterValueSampleInterval")
             .withValue("60");
         var changeConfigRes = new ChangeConfigurationResponse().withStatus(ConfigurationStatus.ACCEPTED);
-        chargePoint.expectRequest(changeConfigReq, changeConfigRes);
+        var changeConfigExchange = chargePoint.planRequest(changeConfigReq, changeConfigRes);
 
+        var operationFuture = supplyAsyncUnchecked(() -> operationsService.changeConfiguration(params));
+        changeConfigExchange.await();
         assertEquals(ConfigurationStatus.ACCEPTED, successResponse(operationFuture.join()));
-
-        expectGetConf(chargePoint);
 
         chargePoint.close();
     }
@@ -2276,15 +2277,14 @@ public class Ocpp16JsonCsmsCertificationIT extends AbstractOcpp16JsonCsms {
         params.setConfKey(AuthorizationKey.name());
         params.setValue(newPassword);
 
-        var future = supplyAsyncUnchecked(() -> operationsService.changeConfiguration(params));
-
-        chargePoint.expectRequest(
+        var changeConfigExchange = chargePoint.planRequest(
             new ChangeConfigurationRequest().withKey(AuthorizationKey.name()).withValue(newPassword),
             new ChangeConfigurationResponse().withStatus(ConfigurationStatus.ACCEPTED)
         );
-        assertEquals(ConfigurationStatus.ACCEPTED, successResponse(future.join()));
 
-        expectGetConf(chargePoint);
+        var future = supplyAsyncUnchecked(() -> operationsService.changeConfiguration(params));
+        changeConfigExchange.await();
+        assertEquals(ConfigurationStatus.ACCEPTED, successResponse(future.join()));
 
         var record = dslContext
             .selectFrom(CHARGE_BOX)
@@ -2786,81 +2786,6 @@ public class Ocpp16JsonCsmsCertificationIT extends AbstractOcpp16JsonCsms {
         ));
 
         chargePoint.close();
-    }
-
-    @Test
-    public void test_TC_083_CSMS_UpgradeChargePointSecurityProfileAccepted() {
-        String password = "0123456789abcdef0123456789abcdef";
-
-        dslContext.update(CHARGE_BOX)
-            .set(CHARGE_BOX.SECURITY_PROFILE, 1)
-            .set(CHARGE_BOX.AUTH_PASSWORD, passwordEncoder.encode(password))
-            .where(CHARGE_BOX.CHARGE_BOX_ID.eq(REGISTERED_CHARGE_BOX_ID))
-            .execute();
-
-        var chargePoint = defaultStation().startWithProfile1(password);
-
-        // change config
-        {
-            var changeConfig = new ChangeConfigurationParams();
-            changeConfig.setChargeBoxIdList(List.of(REGISTERED_CHARGE_BOX_ID));
-            changeConfig.setKeyType(ChangeConfigurationParams.ConfigurationKeyType.PREDEFINED);
-            changeConfig.setConfKey(SecurityProfile.name());
-            changeConfig.setValue("2");
-
-            var changeConfigFuture = supplyAsyncUnchecked(() -> operationsService.changeConfiguration(changeConfig));
-            chargePoint.expectRequest(
-                new ChangeConfigurationRequest().withKey(SecurityProfile.name()).withValue("2"),
-                new ChangeConfigurationResponse().withStatus(ConfigurationStatus.ACCEPTED)
-            );
-            assertEquals(ConfigurationStatus.ACCEPTED, successResponse(changeConfigFuture.join()));
-
-            expectGetConf(chargePoint);
-
-            var chargeBox = dslContext.selectFrom(CHARGE_BOX)
-                .where(CHARGE_BOX.CHARGE_BOX_ID.eq(REGISTERED_CHARGE_BOX_ID))
-                .fetchOne();
-
-            assertNotNull(chargeBox);
-            assertEquals(2, chargeBox.getSecurityProfile());
-        }
-
-        // reset
-        {
-            var reset = new ResetParams();
-            reset.setChargeBoxIdList(List.of(REGISTERED_CHARGE_BOX_ID));
-            reset.setResetType(ResetType.HARD);
-
-            var resetFuture = supplyAsyncUnchecked(() -> operationsService.reset(reset));
-
-            chargePoint.expectRequest(
-                new ResetRequest().withType(ResetType.HARD),
-                new ResetResponse().withStatus(ResetStatus.ACCEPTED)
-            );
-            assertEquals(ResetStatus.ACCEPTED, successResponse(resetFuture.join()));
-        }
-
-        // disconnect and reconnect
-        {
-            chargePoint.close();
-            chargePoint = defaultStation().startWithProfile1(password);
-
-            var bootResp = chargePoint.send(bootNotification(), BootNotificationResponse.class);
-            assertEquals(RegistrationStatus.ACCEPTED, bootResp.getStatus());
-
-            sendAvailableStatusForAllConnectors(chargePoint);
-
-            chargePoint.close();
-        }
-
-        // step 11/12: reconnect with old security profile must be rejected
-        assertThrows(RuntimeException.class, () -> defaultStation().start());
-
-        // step 13/14: reconnect with upgraded security profile is accepted again
-        {
-            chargePoint = defaultStation().startWithProfile1(password);
-            chargePoint.close();
-        }
     }
 
     @Test

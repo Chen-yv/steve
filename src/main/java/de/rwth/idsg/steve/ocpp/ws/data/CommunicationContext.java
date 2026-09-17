@@ -18,11 +18,12 @@
  */
 package de.rwth.idsg.steve.ocpp.ws.data;
 
+import de.rwth.idsg.steve.ocpp.OcppProtocol;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
-import lombok.Setter;
-import org.jetbrains.annotations.NotNull;
-import org.springframework.web.socket.WebSocketSession;
+import org.jetbrains.annotations.Nullable;
+
+import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Default holder/context of incoming and outgoing messages.
@@ -30,27 +31,112 @@ import org.springframework.web.socket.WebSocketSession;
  * @author Sevket Goekay <sevketgokay@gmail.com>
  * @since 23.03.2015
  */
-@RequiredArgsConstructor
-@Getter
 public class CommunicationContext {
 
-    @NotNull private final WebSocketSession session;
-    @NotNull private final String chargeBoxId;
+    // -------------------------------------------------------------------------
+    // Raw messages. These are queue-friendly and can be serialized
+    // -------------------------------------------------------------------------
 
-    @Setter private String incomingString;
-    @Setter private String outgoingString;
+    public record In(
+        String chargeBoxId,
+        OcppProtocol protocol,
+        String webSocketSessionId,
+        Instant receivedAt,
 
-    @Setter private OcppJsonMessage incomingMessage;
-    @Setter private OcppJsonMessage outgoingMessage;
+        String ocppPayload // full and raw JSON array payload
+    ) {
+    }
 
     /**
-     * This is only relevant for requests CSMS sends.
-     * During the outgoing pipeline, we create an instance of this and store it.
-     * During the incoming pipeline (response from station to request), we restore and reference it.
+     * For responses (result or error) to incoming requests
      */
-    @Setter private FutureResponseContext futureResponseContext;
+    public record Out(
+        String chargeBoxId,
+        OcppProtocol protocol,
+        String webSocketSessionId,
 
-    public boolean isSetOutgoingError() {
-        return (outgoingMessage != null) && (outgoingMessage instanceof OcppJsonError);
+        String ocppPayload // full and raw JSON array payload
+    ) {
+    }
+
+    /**
+     * Outgoing requests (calls)
+     */
+    public record OutCall(
+        String chargeBoxId,
+        OcppProtocol protocol,
+        UUID taskUuid,
+
+        String ocppPayload, // full and raw JSON array payload
+        String ocppAction,
+        String ocppMessageId
+    ) {
+    }
+
+    public static Out outFrom(CommunicationContext.In in, String ocppPayload) {
+        return new Out(
+            in.chargeBoxId,
+            in.protocol,
+            in.webSocketSessionId,
+            ocppPayload
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // In-process data holders
+    // -------------------------------------------------------------------------
+
+    public sealed interface DeserializationResult {
+
+    }
+
+    public record InCall(
+        In in,
+        OcppJsonCall call
+    ) implements DeserializationResult {
+    }
+
+    public record InResult(
+        In in,
+        OcppJsonResult result,
+        FutureResponseContext frc
+    ) implements DeserializationResult {
+    }
+
+    public record InError(
+        In in,
+        OcppJsonError error,
+        FutureResponseContext frc
+    ) implements DeserializationResult {
+    }
+
+    // -------------------------------------------------------------------------
+    // Custom exceptions
+    // -------------------------------------------------------------------------
+
+    public static class JsonCallParseException extends Exception {
+
+        @Getter
+        private final OcppJsonError parseError;
+
+        public JsonCallParseException(OcppJsonError parseError) {
+            this.parseError = parseError;
+        }
+    }
+
+    public static class JsonResponseInvalidException extends Exception {
+
+        @Getter
+        private final FutureResponseContext frc;
+
+        public JsonResponseInvalidException(String msg, @Nullable FutureResponseContext frc) {
+            super(msg);
+            this.frc = frc;
+        }
+
+        public JsonResponseInvalidException(String msg, Throwable cause, @Nullable FutureResponseContext frc) {
+            super(msg, cause);
+            this.frc = frc;
+        }
     }
 }

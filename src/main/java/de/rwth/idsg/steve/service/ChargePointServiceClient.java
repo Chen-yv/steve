@@ -19,6 +19,7 @@
 package de.rwth.idsg.steve.service;
 
 import de.rwth.idsg.steve.SteveException;
+import de.rwth.idsg.steve.config.SteveProperties;
 import de.rwth.idsg.steve.ocpp.ChargePointServiceInvokerImpl;
 import de.rwth.idsg.steve.ocpp.CommunicationTask;
 import de.rwth.idsg.steve.ocpp.OcppCallback;
@@ -120,6 +121,8 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static de.rwth.idsg.steve.ocpp.task.UpdateFirmwareTask.UpdateFirmwareResponseStatus;
@@ -142,6 +145,7 @@ public class ChargePointServiceClient {
     private final CertificateRepository certificateRepository;
     private final EventRepository eventRepository;
 
+    private final SteveProperties steveProperties;
     private final TaskExecutor taskExecutor;
     private final TaskStore taskStore;
     private final ChargePointServiceInvokerImpl invoker;
@@ -199,11 +203,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.changeAvailability(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.changeAvailability(c, task));
     }
 
     @SafeVarargs
@@ -218,7 +218,10 @@ public class ChargePointServiceClient {
 
         // after successfully changing config at station, get all configs from station
         // for us to have the final snapshots of them (i.e. to update database).
-        {
+        //
+        // however, do this only when NOT working with OCTT, because this message throws OCTT off.
+        if (!steveProperties.getOcpp().isOcttQuirksEnabled()) {
+
             // GetConfiguration was not there in Ocpp 1.2
             var ocpp15AndAboveStations = params.getChargePointSelectList()
                 .stream()
@@ -247,11 +250,7 @@ public class ChargePointServiceClient {
             });
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.changeConfiguration(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.changeConfiguration(c, task));
     }
 
     @SafeVarargs
@@ -264,11 +263,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.clearCache(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.clearCache(c, task));
     }
 
     @SafeVarargs
@@ -281,11 +276,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.getDiagnostics(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.getDiagnostics(c, task));
     }
 
     @SafeVarargs
@@ -298,11 +289,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.reset(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.reset(c, task));
     }
 
     @SafeVarargs
@@ -315,11 +302,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.updateFirmware(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.updateFirmware(c, task));
     }
 
     // -------------------------------------------------------------------------
@@ -347,11 +330,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forFirst(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.remoteStartTransaction(c, task));
-
-        return taskStore.add(task);
+        return executeForFirst(task, c -> invoker.remoteStartTransaction(c, task));
     }
 
     @SafeVarargs
@@ -364,11 +343,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forFirst(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.remoteStopTransaction(c, task));
-
-        return taskStore.add(task);
+        return executeForFirst(task, c -> invoker.remoteStopTransaction(c, task));
     }
 
     @SafeVarargs
@@ -381,11 +356,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forFirst(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.unlockConnector(c, task));
-
-        return taskStore.add(task);
+        return executeForFirst(task, c -> invoker.unlockConnector(c, task));
     }
 
     // -------------------------------------------------------------------------
@@ -402,11 +373,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.dataTransfer(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.dataTransfer(c, task));
     }
 
     @SafeVarargs
@@ -419,11 +386,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.getConfiguration(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.getConfiguration(c, task));
     }
 
     @SafeVarargs
@@ -436,11 +399,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.getLocalListVersion(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.getLocalListVersion(c, task));
     }
 
     @SafeVarargs
@@ -453,11 +412,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.sendLocalList(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.sendLocalList(c, task));
     }
 
     // -------------------------------------------------------------------------
@@ -487,11 +442,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forFirst(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.reserveNow(c, task));
-
-        return taskStore.add(task);
+        return executeForFirst(task, c -> invoker.reserveNow(c, task));
     }
 
     @SafeVarargs
@@ -504,11 +455,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forFirst(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.cancelReservation(c, task));
-
-        return taskStore.add(task);
+        return executeForFirst(task, c -> invoker.cancelReservation(c, task));
     }
 
     // -------------------------------------------------------------------------
@@ -525,11 +472,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.triggerMessage(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.triggerMessage(c, task));
     }
 
     @SafeVarargs
@@ -541,11 +484,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.setChargingProfile(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.setChargingProfile(c, task));
     }
 
     @SafeVarargs
@@ -568,11 +507,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.clearChargingProfile(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.clearChargingProfile(c, task));
     }
 
     @SafeVarargs
@@ -585,11 +520,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.getCompositeSchedule(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.getCompositeSchedule(c, task));
     }
 
     // -------------------------------------------------------------------------
@@ -606,11 +537,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.extendedTriggerMessage(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.extendedTriggerMessage(c, task));
     }
 
     @SafeVarargs
@@ -625,11 +552,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.getLog(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.getLog(c, task));
     }
 
     @SafeVarargs
@@ -644,11 +567,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.signedUpdateFirmware(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.signedUpdateFirmware(c, task));
     }
 
     @SafeVarargs
@@ -661,11 +580,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.installCertificate(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.installCertificate(c, task));
     }
 
     @SafeVarargs
@@ -678,11 +593,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forFirst(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.deleteCertificate(c, task));
-
-        return taskStore.add(task);
+        return executeForFirst(task, c -> invoker.deleteCertificate(c, task));
     }
 
     @SafeVarargs
@@ -695,11 +606,7 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.certificateSigned(c, task));
-
-        return taskStore.add(task);
+        return executeForEach(task, c -> invoker.certificateSigned(c, task));
     }
 
     @SafeVarargs
@@ -712,10 +619,28 @@ public class ChargePointServiceClient {
             task.addCallback(callback);
         }
 
-        BackgroundService.with(taskExecutor)
-            .forEach(task.getParams().getChargePointSelectList())
-            .execute(c -> invoker.getInstalledCertificateIds(c, task));
+        return executeForEach(task, c -> invoker.getInstalledCertificateIds(c, task));
+    }
 
-        return taskStore.add(task);
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
+    private int executeForFirst(CommunicationTask<?, ?> task, Consumer<ChargePointSelect> consumer) {
+        if (task.getParams().getChargePointSelectList().size() != 1) {
+            throw new SteveException.BadRequest("This operation is for one station only");
+        }
+        return executeForEach(task, consumer);
+    }
+
+    private int executeForEach(CommunicationTask<?, ?> task, Consumer<ChargePointSelect> consumer) {
+        int taskId = taskStore.add(task);
+        try {
+            taskExecutor.execute(() -> task.getParams().getChargePointSelectList().forEach(consumer));
+        } catch (RejectedExecutionException e) {
+            taskStore.remove(taskId, task);
+            throw e;
+        }
+        return taskId;
     }
 }

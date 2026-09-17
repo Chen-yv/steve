@@ -18,20 +18,16 @@
  */
 package de.rwth.idsg.steve.ocpp.ws;
 
-import de.rwth.idsg.ocpp.jaxb.RequestType;
 import de.rwth.idsg.steve.SteveException;
+import de.rwth.idsg.steve.messaging.Messaging;
 import de.rwth.idsg.steve.ocpp.CommunicationTask;
-import de.rwth.idsg.steve.ocpp.ws.data.ActionResponsePair;
 import de.rwth.idsg.steve.ocpp.ws.data.CommunicationContext;
-import de.rwth.idsg.steve.ocpp.ws.data.FutureResponseContext;
 import de.rwth.idsg.steve.ocpp.ws.data.OcppJsonCall;
-import de.rwth.idsg.steve.ocpp.ws.ocpp12.Ocpp12TypeStore;
-import de.rwth.idsg.steve.ocpp.ws.ocpp15.Ocpp15TypeStore;
-import de.rwth.idsg.steve.ocpp.ws.ocpp16.Ocpp16TypeStore;
-import de.rwth.idsg.steve.ocpp.ws.pipeline.OutgoingCallPipeline;
+import de.rwth.idsg.steve.ocpp.ws.pipeline.Serializer;
 import de.rwth.idsg.steve.repository.dto.ChargePointSelect;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;
@@ -45,8 +41,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ChargePointServiceJsonInvoker {
 
-    private final OutgoingCallPipeline outgoingCallPipeline;
-    private final SessionContextStoreHolder sessionContextStoreHolder;
+    private final Messaging.OutCall.Producer outCallProducer;
 
     /**
      * Just a wrapper to make try-catch block and exception handling stand out
@@ -70,37 +65,31 @@ public class ChargePointServiceJsonInvoker {
         }
 
         var chargeBoxId = cps.getChargeBoxId();
+        var request = task.getOcppRequest(chargeBoxId);
+        var typeStore = TypeStore.getTypeStore(cps.getOcppProtocol().getVersion());
 
-        var sessionStore = sessionContextStoreHolder.getOrCreate(cps.getOcppProtocol().getVersion());
-
-        var typeStore = switch (cps.getOcppProtocol().getVersion()) {
-            case V_12 -> Ocpp12TypeStore.INSTANCE;
-            case V_15 -> Ocpp15TypeStore.INSTANCE;
-            case V_16 -> Ocpp16TypeStore.INSTANCE;
-        };
-
-        RequestType request = switch (cps.getOcppProtocol().getVersion()) {
-            case V_12 -> task.getOcpp12Request();
-            case V_15 -> task.getOcpp15Request();
-            case V_16 -> task.getOcpp16Request();
-        };
-
-        ActionResponsePair pair = typeStore.findActionResponse(request);
-        if (pair == null) {
+        var action = typeStore.findAction(request);
+        if (action == null) {
             throw new SteveException("Action name is not found");
         }
 
         OcppJsonCall call = new OcppJsonCall();
         call.setMessageId(UUID.randomUUID().toString());
         call.setPayload(request);
-        call.setAction(pair.getAction());
+        call.setAction(action);
 
-        FutureResponseContext frc = new FutureResponseContext(task, pair.getResponseClass());
+        // Create the payload to send
+        String callPayload = Serializer.INSTANCE.accept(call);
 
-        CommunicationContext context = new CommunicationContext(sessionStore.getSession(chargeBoxId), chargeBoxId);
-        context.setOutgoingMessage(call);
-        context.setFutureResponseContext(frc);
+        var context = new CommunicationContext.OutCall(
+            chargeBoxId,
+            cps.getOcppProtocol(),
+            task.getTaskUuid(),
+            callPayload,
+            call.getAction(),
+            call.getMessageId()
+        );
 
-        outgoingCallPipeline.accept(context);
+        outCallProducer.send(MessageBuilder.withPayload(context).build());
     }
 }

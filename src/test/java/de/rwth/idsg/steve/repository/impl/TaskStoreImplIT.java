@@ -18,20 +18,19 @@
  */
 package de.rwth.idsg.steve.repository.impl;
 
-import de.rwth.idsg.steve.ocpp.TaskOrigin;
-import de.rwth.idsg.steve.repository.TaskStore;
 import de.rwth.idsg.steve.SteveException;
+import de.rwth.idsg.steve.ocpp.OcppProtocol;
+import de.rwth.idsg.steve.ocpp.task.ClearCacheTask;
+import de.rwth.idsg.steve.repository.TaskStore;
+import de.rwth.idsg.steve.repository.dto.ChargePointSelect;
+import de.rwth.idsg.steve.web.dto.ocpp.MultipleChargePointSelect;
 import org.jooq.DSLContext;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
-import java.util.HashMap;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import java.util.List;
 
 /**
  * Created with assistance from GPT-5.3-Codex
@@ -46,11 +45,13 @@ public class TaskStoreImplIT extends AbstractRepositoryITBase {
     @BeforeEach
     public void setup() {
         resetDatabase(dslContext);
+        repository.clearFinished();
+        repository.clearUnfinished();
     }
 
     @Test
     public void getOverview() {
-        Integer taskId = repository.add(mockTask(false));
+        Integer taskId = repository.add(task(false));
         var overview = assertNoDatabaseException(repository::getOverview);
         Assertions.assertFalse(overview.isEmpty());
         Assertions.assertEquals(taskId, overview.get(0).getTaskId());
@@ -58,45 +59,58 @@ public class TaskStoreImplIT extends AbstractRepositoryITBase {
 
     @Test
     public void get() {
-        Integer taskId = repository.add(mockTask(false));
-        var task = assertNoDatabaseException(() -> repository.get(taskId));
-        Assertions.assertNotNull(task);
+        var expectedTask = task(false);
+        Integer taskId = repository.add(expectedTask);
+        var taskById = assertNoDatabaseException(() -> repository.get(taskId));
+        var taskByUuid = assertNoDatabaseException(() -> repository.get(expectedTask.getTaskUuid()));
+        Assertions.assertSame(expectedTask, taskById);
+        Assertions.assertSame(expectedTask, taskByUuid);
     }
 
     @Test
     public void add() {
-        Integer taskId = assertNoDatabaseException(() -> repository.add(mockTask(false)));
-        Assertions.assertNotNull(taskId);
+        var task = task(false);
+        Integer taskId = assertNoDatabaseException(() -> repository.add(task));
+        Assertions.assertTrue(taskId > 0);
     }
 
     @Test
     public void clearFinished() {
-        Integer finishedId = repository.add(mockTask(true));
-        Integer unfinishedId = repository.add(mockTask(false));
+        var finishedTask = task(true);
+        var unfinishedTask = task(false);
+        Integer finishedId = repository.add(finishedTask);
+        Integer unfinishedId = repository.add(unfinishedTask);
 
         assertNoDatabaseException(repository::clearFinished);
 
         Assertions.assertThrows(SteveException.class, () -> repository.get(finishedId));
+        Assertions.assertThrows(SteveException.class, () -> repository.get(finishedTask.getTaskUuid()));
         Assertions.assertNotNull(repository.get(unfinishedId));
+        Assertions.assertNotNull(repository.get(unfinishedTask.getTaskUuid()));
     }
 
     @Test
     public void clearUnfinished() {
-        Integer finishedId = repository.add(mockTask(true));
-        Integer unfinishedId = repository.add(mockTask(false));
+        var finishedTask = task(true);
+        var unfinishedTask = task(false);
+        Integer finishedId = repository.add(finishedTask);
+        Integer unfinishedId = repository.add(unfinishedTask);
 
         assertNoDatabaseException(repository::clearUnfinished);
 
         Assertions.assertNotNull(repository.get(finishedId));
+        Assertions.assertNotNull(repository.get(finishedTask.getTaskUuid()));
         Assertions.assertThrows(SteveException.class, () -> repository.get(unfinishedId));
+        Assertions.assertThrows(SteveException.class, () -> repository.get(unfinishedTask.getTaskUuid()));
     }
 
-    private static de.rwth.idsg.steve.ocpp.CommunicationTask mockTask(boolean finished) {
-        var task = mock(de.rwth.idsg.steve.ocpp.CommunicationTask.class);
-        when(task.isFinished()).thenReturn(finished);
-        when(task.getOrigin()).thenReturn(TaskOrigin.INTERNAL);
-        when(task.getResponseCount()).thenReturn(new AtomicInteger(0));
-        when(task.getResultMap()).thenReturn(new HashMap<>());
+    private static de.rwth.idsg.steve.ocpp.CommunicationTask task(boolean finished) {
+        var params = new MultipleChargePointSelect();
+        params.setChargePointSelectList(List.of(new ChargePointSelect(OcppProtocol.V_16_JSON, "station")));
+        var task = new ClearCacheTask(params);
+        if (finished) {
+            task.addNewResponse("station", "response");
+        }
         return task;
     }
 }

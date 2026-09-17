@@ -24,7 +24,6 @@ import de.rwth.idsg.ocpp.jaxb.ResponseType;
 import de.rwth.idsg.steve.ocpp.OcppSecurityProfile;
 import de.rwth.idsg.steve.ocpp.OcppVersion;
 import de.rwth.idsg.steve.ocpp.ws.JsonObjectMapper;
-import de.rwth.idsg.steve.ocpp.ws.data.CommunicationContext;
 import de.rwth.idsg.steve.ocpp.ws.data.ErrorCode;
 import de.rwth.idsg.steve.ocpp.ws.data.MessageType;
 import de.rwth.idsg.steve.ocpp.ws.data.OcppJsonCall;
@@ -33,6 +32,7 @@ import de.rwth.idsg.steve.ocpp.ws.data.OcppJsonMessage;
 import de.rwth.idsg.steve.ocpp.ws.data.OcppJsonResponse;
 import de.rwth.idsg.steve.ocpp.ws.data.OcppJsonResult;
 import de.rwth.idsg.steve.ocpp.ws.pipeline.Serializer;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -52,8 +52,6 @@ import org.jetbrains.annotations.Nullable;
 import org.opentest4j.AssertionFailedError;
 import org.springframework.boot.web.server.Ssl;
 import org.springframework.util.CollectionUtils;
-import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.adapter.jetty.JettyWebSocketSession;
 import tools.jackson.core.JsonParser;
 import tools.jackson.core.TreeNode;
 import tools.jackson.databind.JsonNode;
@@ -67,7 +65,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Deque;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -89,7 +86,7 @@ public class OcppJsonChargePoint {
     private final String chargeBoxId;
     private final String connectionPath;
     private final CountDownLatch closeHappenedSignal;
-    private final Deque<ExchangeContext> exchangeQueue;
+    private final Deque<ExchangeContext<?, ?>> exchangeQueue;
 
     private final Thread testerThread;
     private RuntimeException testerThreadInterruptReason;
@@ -154,7 +151,25 @@ public class OcppJsonChargePoint {
             this.session = connect.get(); // block until session is created
             return this;
         } catch (Throwable t) {
+            // The client is started before the connection is attempted, and a caller cannot
+            // clean it up afterwards: close() begins with session.close(), and there is no
+            // session when we got here. Tests that expect start() to fail -- an unknown
+            // charge box, a wrong subprotocol -- would otherwise leave a Jetty client and
+            // its threads running for the rest of the fork.
+            stopClientQuietly();
             throw new RuntimeException(t);
+        }
+    }
+
+    /** Best effort: the exception from the failed start is the one worth reporting. */
+    private void stopClientQuietly() {
+        if (client == null) {
+            return;
+        }
+        try {
+            client.stop();
+        } catch (Exception e) {
+            log.warn("Failed to stop websocket client after a failed start", e);
         }
     }
 
@@ -186,16 +201,16 @@ public class OcppJsonChargePoint {
     // Request/response planning
     // -------------------------------------------------------------------------
 
-    public <T extends ResponseType> T send(RequestType payload, Class<T> responseClass) {
+    public <RES extends ResponseType> RES send(RequestType payload, Class<RES> responseClass) {
         return send(payload, getOperationName(payload), responseClass);
     }
 
-    public <T extends ResponseType> T send(@Nullable RequestType payload, String action, Class<T> responseClass) {
+    public <RES extends ResponseType> RES send(@Nullable RequestType payload, String action, Class<RES> responseClass) {
         var incoming = sendInternal(payload, action, responseClass);
 
         if (incoming instanceof OcppJsonResult result) {
             if (responseClass.isInstance(result.getPayload())) {
-                return (T) result.getPayload();
+                return (RES) result.getPayload();
             } else {
                 throw new AssertionFailedError("Response payload is not expected class type");
             }
@@ -215,19 +230,11 @@ public class OcppJsonChargePoint {
     }
 
     public void expectRequest(RequestType expectedRequest, ResponseType plannedResponse) {
-        OcppJsonResult result = new OcppJsonResult();
-        result.setMessageId(null); // must and will be set later from actual incoming request
-        result.setPayload(plannedResponse);
-
-        expectRequestInternal(expectedRequest.getClass(), expectedRequest, result);
+        planRequest(expectedRequest, plannedResponse).await();
     }
 
     public void expectRequest(RequestType expectedRequest, ErrorCode plannedErrorCode) {
-        OcppJsonError error = new OcppJsonError();
-        error.setMessageId(null); // must and will be set later from actual incoming request
-        error.setErrorCode(plannedErrorCode);
-
-        expectRequestInternal(expectedRequest.getClass(), expectedRequest, error);
+        planRequest(expectedRequest, plannedErrorCode).await();
     }
 
     /**
@@ -235,17 +242,40 @@ public class OcppJsonChargePoint {
      * generated which we cannot anticipate before. but, we can return the request payload that just arrived
      * to the caller, for the caller to do some after-the-fact validation.
      */
-    public <T extends RequestType> T expectRequest(Class<T> requestClass, ResponseType plannedResponse) {
+    public <REQ extends RequestType, RES extends ResponseType> REQ expectRequest(Class<REQ> requestClass, RES plannedResponse) {
+        return planRequest(requestClass, plannedResponse).await();
+    }
+
+    public <REQ extends RequestType, RES extends ResponseType> ExchangeContext<REQ, RES> planRequest(REQ expectedRequest, RES plannedResponse) {
         OcppJsonResult result = new OcppJsonResult();
         result.setMessageId(null); // must and will be set later from actual incoming request
         result.setPayload(plannedResponse);
 
-        return expectRequestInternal(requestClass, null, result);
+        return planRequestInternal((Class<REQ>) expectedRequest.getClass(), expectedRequest, result);
     }
 
-    private <T extends ResponseType> OcppJsonMessage sendInternal(@Nullable RequestType payload,
-                                                                  @NotNull String action,
-                                                                  @Nullable Class<T> responseClass) {
+    public <REQ extends RequestType, RES extends ResponseType> ExchangeContext<REQ, RES> planRequest(REQ expectedRequest, ErrorCode plannedErrorCode) {
+        OcppJsonError error = new OcppJsonError();
+        error.setMessageId(null); // must and will be set later from actual incoming request
+        error.setErrorCode(plannedErrorCode);
+
+        return planRequestInternal((Class<REQ>) expectedRequest.getClass(), expectedRequest, error);
+    }
+
+    /**
+     * For chained CSMS-to-CP calls, plan all expected requests first and await them afterwards.
+     */
+    public <REQ extends RequestType, RES extends ResponseType> ExchangeContext<REQ, RES> planRequest(Class<REQ> requestClass, RES plannedResponse) {
+        OcppJsonResult result = new OcppJsonResult();
+        result.setMessageId(null); // must and will be set later from actual incoming request
+        result.setPayload(plannedResponse);
+
+        return planRequestInternal(requestClass, null, result);
+    }
+
+    private <REQ extends RequestType, RES extends ResponseType> OcppJsonMessage sendInternal(@Nullable REQ payload,
+                                                                                             @NotNull String action,
+                                                                                             @Nullable Class<RES> responseClass) {
         String messageId = UUID.randomUUID().toString();
 
         OcppJsonCall call = new OcppJsonCall();
@@ -253,15 +283,12 @@ public class OcppJsonChargePoint {
         call.setPayload(payload);
         call.setAction(action);
 
-        JettyWebSocketSession webSocketSession = new JettyWebSocketSession(Map.of());
-        webSocketSession.initializeNativeSession(session);
-
-        ExchangeContext ctx = new ExchangeContext(webSocketSession, chargeBoxId);
+        ExchangeContext<REQ, RES> ctx = new ExchangeContext<>();
         ctx.setOutgoingMessage(call);
-        ctx.setResponseClass(responseClass == null ? null : (Class<ResponseType>) responseClass);
+        ctx.setResponseClass(responseClass);
         exchangeQueue.add(ctx);
 
-        Serializer.INSTANCE.accept(ctx);
+        ctx.setOutgoingString(Serializer.INSTANCE.accept(call));
 
         try {
             session.sendText(ctx.getOutgoingString(), NOOP);
@@ -271,7 +298,7 @@ public class OcppJsonChargePoint {
 
         // wait for the response to arrive and be processed
         try {
-            boolean completedInTime = ctx.doneSignal.await(30, TimeUnit.SECONDS);
+            boolean completedInTime = ctx.getDoneSignal().await(30, TimeUnit.SECONDS);
             if (!completedInTime) {
                 throw new AssertionFailedError("Timed out waiting for response. action=" + action + ", messageId=" + messageId);
             }
@@ -285,37 +312,22 @@ public class OcppJsonChargePoint {
         return ctx.getIncomingMessage();
     }
 
-    private <T extends RequestType> T expectRequestInternal(Class<T> requestClass,
-                                                            @Nullable RequestType expectedRequest,
-                                                            OcppJsonResponse preparedResponse) {
+    private <REQ extends RequestType, RES extends ResponseType> ExchangeContext<REQ, RES> planRequestInternal(Class<REQ> requestClass,
+                                                                                                              @Nullable REQ expectedRequest,
+                                                                                                              OcppJsonResponse preparedResponse) {
         OcppJsonCall call = new OcppJsonCall();
         call.setMessageId(null); // must and will be set later from actual incoming request
         call.setAction(getOperationName(requestClass));
         call.setPayload(expectedRequest);
 
-        JettyWebSocketSession webSocketSession = new JettyWebSocketSession(Map.of());
-        webSocketSession.initializeNativeSession(session);
-
-        ExchangeContext ctx = new ExchangeContext(webSocketSession, chargeBoxId);
+        ExchangeContext<REQ, RES> ctx = new ExchangeContext<>();
         ctx.setIncomingMessage(call);
         ctx.setOutgoingMessage(preparedResponse);
-        ctx.setRequestClass((Class<RequestType>) requestClass);
+        ctx.setRequestClass(requestClass);
 
         exchangeQueue.add(ctx);
 
-        // wait for the call to arrive and be responded with
-        try {
-            boolean completedInTime = ctx.doneSignal.await(30, TimeUnit.SECONDS);
-            if (!completedInTime) {
-                throw new AssertionFailedError("Timed out waiting for expected request. action=" + call.getAction());
-            }
-            return (T) call.getPayload();
-        } catch (InterruptedException e) {
-            if (testerThreadInterruptReason != null) {
-                throw testerThreadInterruptReason;
-            }
-            throw new RuntimeException(e);
-        }
+        return ctx;
     }
 
     // -------------------------------------------------------------------------
@@ -392,7 +404,7 @@ public class OcppJsonChargePoint {
         result.setPayload(res);
 
         exchangeContext.setIncomingMessage(result);
-        exchangeContext.doneSignal.countDown();
+        exchangeContext.getDoneSignal().countDown();
     }
 
     private void handleError(String messageId, JsonParser parser) throws Exception {
@@ -428,7 +440,7 @@ public class OcppJsonChargePoint {
         }
 
         exchangeContext.setIncomingMessage(error);
-        exchangeContext.doneSignal.countDown();
+        exchangeContext.getDoneSignal().countDown();
     }
 
     private void handleCall(String messageId, JsonParser parser) {
@@ -485,7 +497,7 @@ public class OcppJsonChargePoint {
         var outgoing = exchangeContext.getOutgoingMessage();
         outgoing.setMessageId(messageId);
 
-        Serializer.INSTANCE.accept(exchangeContext);
+        exchangeContext.setOutgoingString(Serializer.INSTANCE.accept(outgoing));
 
         try {
             session.sendText(exchangeContext.getOutgoingString(), NOOP);
@@ -493,7 +505,7 @@ public class OcppJsonChargePoint {
             log.error("Exception", e);
         }
 
-        exchangeContext.doneSignal.countDown();
+        exchangeContext.getDoneSignal().countDown();
     }
 
     // -------------------------------------------------------------------------
@@ -543,16 +555,33 @@ public class OcppJsonChargePoint {
         return new WebSocketClient(httpClient);
     }
 
-    @Setter
-    @Getter
-    private static class ExchangeContext extends CommunicationContext {
+    @Getter(AccessLevel.PRIVATE)
+    @Setter(AccessLevel.PRIVATE)
+    public final class ExchangeContext<REQ extends RequestType, RES extends ResponseType> {
 
-        private Class<RequestType> requestClass;
-        private Class<ResponseType> responseClass;
-        private CountDownLatch doneSignal = new CountDownLatch(1);
+        private Class<REQ> requestClass;
+        private Class<RES> responseClass;
+        private OcppJsonMessage incomingMessage;
+        private OcppJsonMessage outgoingMessage;
+        private String outgoingString;
+        private final CountDownLatch doneSignal = new CountDownLatch(1);
 
-        public ExchangeContext(@NotNull WebSocketSession session, @NotNull String chargeBoxId) {
-            super(session, chargeBoxId);
+        public REQ await() {
+            // wait for the call to arrive and be responded with
+            try {
+                OcppJsonCall call = (OcppJsonCall) getIncomingMessage();
+
+                boolean completedInTime = doneSignal.await(30, TimeUnit.SECONDS);
+                if (!completedInTime) {
+                    throw new AssertionFailedError("Timed out waiting for expected request. action=" + call.getAction());
+                }
+                return (REQ) call.getPayload();
+            } catch (InterruptedException e) {
+                if (testerThreadInterruptReason != null) {
+                    throw testerThreadInterruptReason;
+                }
+                throw new RuntimeException(e);
+            }
         }
     }
 }

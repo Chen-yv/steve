@@ -20,6 +20,7 @@ package de.rwth.idsg.steve.service;
 
 import jooq.steve.db.enums.TransactionStopEventActor;
 import jooq.steve.db.tables.records.TransactionRecord;
+import ocpp._2022._02.security.SecurityEventNotification;
 import ocpp.cs._2015._10.Measurand;
 import ocpp.cs._2015._10.MeterValue;
 import ocpp.cs._2015._10.MeterValuesRequest;
@@ -34,13 +35,13 @@ import ocpp.cs._2015._10.ValueFormat;
 import org.joda.time.DateTime;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.BiFunction;
 
 /**
  * @author Sevket Goekay <sevketgokay@gmail.com>
@@ -50,114 +51,140 @@ public class CentralSystemService16ServiceValidatorTest {
 
     private static final Instant NOW = Instant.parse("2026-02-17T12:00:00Z");
     private static final Clock FIXED_CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
+    private static final BiFunction<String, String, Boolean> DIFFERENT_PARENTS = (first, second) -> false;
 
     private final CentralSystemService16_ServiceValidator validator = new CentralSystemService16_ServiceValidator(FIXED_CLOCK);
 
     @Test
-    public void validateStart_connectorIdZero_returnsError() {
+    public void validateStart_connectorIdZero_returnsHardError() {
         var result = validator.validateStart(startParams(0, 10, new DateTime(NOW.toEpochMilli())));
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("StartTransaction.connectorId must be positive", result.getMessage());
+        assertHardErrors(result, "StartTransaction.connectorId must be positive");
     }
 
     @Test
-    public void validateStart_meterStartNegative_returnsError() {
+    public void validateStart_meterStartNegative_returnsHardError() {
         var result = validator.validateStart(startParams(1, -1, new DateTime(NOW.toEpochMilli())));
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("StartTransaction.meterStart must not be negative", result.getMessage());
+        assertHardErrors(result, "StartTransaction.meterStart must not be negative");
     }
 
     @Test
-    public void validateStart_futureTimestamp_returnsError() {
+    public void validateStart_futureTimestamp_returnsSoftError() {
         var result = validator.validateStart(startParams(1, 10, DateTime.parse("2026-02-17T12:05:01Z")));
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("StartTransaction.timestamp is in the future", result.getMessage());
+        assertSoftErrors(result, "StartTransaction.timestamp is in the future");
+    }
+
+    @Test
+    public void validateStart_multipleProblems_returnsAllErrorsBySeverity() {
+        var result = validator.validateStart(startParams(0, -1, DateTime.parse("2026-02-17T12:05:01Z")));
+
+        assertErrors(
+            result,
+            List.of("StartTransaction.timestamp is in the future"),
+            List.of(
+                "StartTransaction.connectorId must be positive",
+                "StartTransaction.meterStart must not be negative"
+            )
+        );
     }
 
     @Test
     public void validateStart_futureTimestampAtBoundary_isAllowed() {
         var result = validator.validateStart(startParams(1, 10, DateTime.parse("2026-02-17T12:05:00Z")));
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateStatusNotification_connectorIdNegative_returnsError() {
+    public void validateStatusNotification_connectorIdNegative_returnsHardError() {
         var result = validator.validateStatusNotification(statusParams(-1, DateTime.parse("2026-02-17T12:00:00Z")));
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("StatusNotification.connectorId must not be negative", result.getMessage());
+        assertHardErrors(result, "StatusNotification.connectorId must not be negative");
     }
 
     @Test
-    public void validateStatusNotification_futureTimestamp_returnsError() {
+    public void validateStatusNotification_futureTimestamp_returnsSoftError() {
         var result = validator.validateStatusNotification(statusParams(1, DateTime.parse("2026-02-17T12:05:01Z")));
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("StatusNotification.timestamp is in the future", result.getMessage());
+        assertSoftErrors(result, "StatusNotification.timestamp is in the future");
     }
 
     @Test
     public void validateStatusNotification_futureTimestampAtBoundary_isAllowed() {
         var result = validator.validateStatusNotification(statusParams(1, DateTime.parse("2026-02-17T12:05:00Z")));
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
     public void validateStatusNotification_withoutTimestamp_isAllowed() {
         var result = validator.validateStatusNotification(new StatusNotificationRequest().withConnectorId(1));
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateMeterValues_connectorIdNegative_returnsError() {
+    public void validateSecurityEvent_futureTimestamp_returnsSoftError() {
+        var params = new SecurityEventNotification()
+            .withTimestamp(DateTime.parse("2026-02-17T12:05:01Z"));
+
+        var result = validator.validateSecurityEvent(params);
+
+        assertSoftErrors(result, "SecurityEventNotification.timestamp is in the future");
+    }
+
+    @Test
+    public void validateSecurityEvent_futureTimestampAtBoundary_isAllowed() {
+        var params = new SecurityEventNotification()
+            .withTimestamp(DateTime.parse("2026-02-17T12:05:00Z"));
+
+        var result = validator.validateSecurityEvent(params);
+
+        assertValid(result);
+    }
+
+    @Test
+    public void validateMeterValues_connectorIdNegative_returnsHardError() {
         var result = validator.validateMeterValues(meterValuesParams(-1, List.of(meterValue("2026-02-17T10:00:00Z"))));
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("MeterValues.connectorId must not be negative", result.getMessage());
+        assertHardErrors(result, "MeterValues.connectorId must not be negative");
     }
 
     @Test
-    public void validateMeterValues_futureTimestamp_returnsError() {
+    public void validateMeterValues_futureTimestamp_returnsSoftError() {
         var result = validator.validateMeterValues(meterValuesParams(1, List.of(meterValue("2026-02-17T12:05:01Z"))));
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("at least one MeterValue.timestamp is in the future", result.getMessage());
+        assertSoftErrors(result, "at least one MeterValue.timestamp is in the future");
     }
 
     @Test
-    public void validateMeterValues_nullTimestamp_returnsError() {
+    public void validateMeterValues_nullTimestamp_returnsHardError() {
         var result = validator.validateMeterValues(meterValuesParams(1, List.of(new MeterValue())));
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("MeterValue.timestamp is empty", result.getMessage());
+        assertHardErrors(result, "MeterValue.timestamp is empty");
     }
 
     @Test
-    public void validateMeterValues_valid_returnsNull() {
+    public void validateMeterValues_valid_returnsValidResult() {
         var result = validator.validateMeterValues(meterValuesParams(1, List.of(meterValue("2026-02-17T12:05:00Z"))));
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateMeterValuesWithTransaction_transactionMissing_returnsError() {
+    public void validateMeterValuesWithTransaction_transactionMissing_returnsHardError() {
         var result = validator.validateMeterValues(
             meterValuesParams(1, List.of(meterValue("2026-02-17T10:00:00Z"))),
             null
         );
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("The transaction is not found in database", result.getMessage());
+        assertHardErrors(result, "The transaction is not found in database");
     }
 
     @Test
-    public void validateMeterValuesWithTransaction_transactionAlreadyStoppedByStation_returnsError() {
+    public void validateMeterValuesWithTransaction_transactionAlreadyStoppedByStation_returnsHardError() {
         var tx = tx(
             "100",
             DateTime.parse("2026-02-17T09:00:00Z"),
@@ -171,8 +198,7 @@ public class CentralSystemService16ServiceValidatorTest {
             tx
         );
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("The transaction was already stopped by the station", result.getMessage());
+        assertHardErrors(result, "The transaction was already stopped by the station");
     }
 
     @Test
@@ -190,11 +216,11 @@ public class CentralSystemService16ServiceValidatorTest {
             tx
         );
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateMeterValuesWithTransaction_connectorIdNegative_returnsError() {
+    public void validateMeterValuesWithTransaction_connectorIdNegative_returnsHardError() {
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
 
         var result = validator.validateMeterValues(
@@ -202,12 +228,11 @@ public class CentralSystemService16ServiceValidatorTest {
             tx
         );
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("MeterValues.connectorId must not be negative", result.getMessage());
+        assertHardErrors(result, "MeterValues.connectorId must not be negative");
     }
 
     @Test
-    public void validateMeterValuesWithTransaction_beforeStartTimestamp_returnsError() {
+    public void validateMeterValuesWithTransaction_beforeStartTimestamp_returnsSoftError() {
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
 
         var result = validator.validateMeterValues(
@@ -215,12 +240,11 @@ public class CentralSystemService16ServiceValidatorTest {
             tx
         );
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("at least one MeterValue.timestamp is before start.timestamp", result.getMessage());
+        assertSoftErrors(result, "at least one MeterValue.timestamp is before start.timestamp");
     }
 
     @Test
-    public void validateMeterValuesWithTransaction_valid_returnsNull() {
+    public void validateMeterValuesWithTransaction_valid_returnsValidResult() {
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
 
         var result = validator.validateMeterValues(
@@ -228,20 +252,19 @@ public class CentralSystemService16ServiceValidatorTest {
             tx
         );
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateStop_transactionMissing_returnsError() {
+    public void validateStop_transactionMissing_returnsHardError() {
         var params = stopParams(new DateTime(NOW.toEpochMilli()), "200");
-        var result = validator.validateStop(null, params);
+        var result = validator.validateStop(null, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("The transaction is not found in database", result.getMessage());
+        assertHardErrors(result, "The transaction is not found in database");
     }
 
     @Test
-    public void validateStop_transactionAlreadyStoppedByStation_returnsError() {
+    public void validateStop_transactionAlreadyStoppedByStation_returnsHardError() {
         var tx = tx(
             "100",
             DateTime.parse("2026-02-17T09:00:00Z"),
@@ -250,10 +273,9 @@ public class CentralSystemService16ServiceValidatorTest {
             TransactionStopEventActor.station
         );
         var params = stopParams(DateTime.parse("2026-02-17T10:30:00Z"), "200");
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("The transaction was already stopped by the station", result.getMessage());
+        assertHardErrors(result, "The transaction was already stopped by the station");
     }
 
     @Test
@@ -266,92 +288,126 @@ public class CentralSystemService16ServiceValidatorTest {
             TransactionStopEventActor.manual
         );
         var params = stopParams(DateTime.parse("2026-02-17T10:30:00Z"), "200");
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateStop_startAfterStop_returnsError() {
+    public void validateStop_startAfterStop_returnsHardError() {
         var tx = tx("100", DateTime.parse("2026-02-17T12:01:00Z"), null, null, null);
         var params = stopParams(DateTime.parse("2026-02-17T12:00:00Z"), "200");
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("start.timestamp is after stop.timestamp", result.getMessage());
+        assertHardErrors(result, "start.timestamp is after stop.timestamp");
     }
 
     @Test
-    public void validateStop_futureStopTimestamp_returnsError() {
+    public void validateStop_futureStopTimestamp_returnsHardError() {
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
         var params = stopParams(DateTime.parse("2026-02-17T12:05:01Z"), "200");
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("stop.timestamp is in the future", result.getMessage());
+        assertHardErrors(result, "stop.timestamp is in the future");
     }
 
     @Test
     public void validateStop_futureStopTimestampAtBoundary_isAllowed() {
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
         var params = stopParams(DateTime.parse("2026-02-17T12:05:00Z"), "200");
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateStop_stopMeterLowerThanStart_returnsError() {
+    public void validateStop_stopMeterLowerThanStart_returnsHardError() {
         var tx = tx("300", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
         var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200");
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("meterStart is greater than meterStop", result.getMessage());
+        assertHardErrors(result, "meterStart is greater than meterStop");
     }
 
     @Test
-    public void validateStop_validStationStop_returnsNull() {
+    public void validateStop_validStationStop_returnsValidResult() {
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
         var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200");
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateStop_transactionDataFutureTimestamp_returnsError() {
+    public void validateStop_differentIdTagsWithoutMatchingParents_returnsHardError() {
+        var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
+        var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200")
+            .withIdTag("tag-2");
+
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
+
+        assertHardErrors(
+            result,
+            "stop.idTag is neither the transaction's idTag nor related to it through parentIdTag"
+        );
+    }
+
+    @Test
+    public void validateStop_differentIdTagsWithMatchingParents_isAllowed() {
+        var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
+        var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200")
+            .withIdTag("tag-2");
+
+        var result = validator.validateStop(tx, params, (first, second) -> true);
+
+        assertValid(result);
+    }
+
+    @Test
+    public void validateStop_withoutIdTag_isAllowed() {
+        var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
+        var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200")
+            .withIdTag(null);
+
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
+
+        assertValid(result);
+    }
+
+    @Test
+    public void validateStop_transactionDataFutureTimestamp_returnsSoftErrors() {
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
         var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200")
             .withTransactionData(List.of(meterValue("2026-02-17T12:05:01Z")));
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("at least one MeterValue.timestamp is in the future", result.getMessage());
+        assertSoftErrors(
+            result,
+            "at least one MeterValue.timestamp is in the future",
+            "at least one MeterValue.timestamp is after stop.timestamp"
+        );
     }
 
     @Test
-    public void validateStop_transactionDataAfterStopTimestamp_returnsError() {
+    public void validateStop_transactionDataAfterStopTimestamp_returnsSoftError() {
         // more than 5 minutes (operational delta) after stop
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
         var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200")
             .withTransactionData(List.of(meterValue("2026-02-17T10:10:00Z")));
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("at least one MeterValue.timestamp is after stop.timestamp", result.getMessage());
+        assertSoftErrors(result, "at least one MeterValue.timestamp is after stop.timestamp");
     }
 
     @Test
-    public void validateStop_transactionDataBeforeStartTimestamp_returnsError() {
+    public void validateStop_transactionDataBeforeStartTimestamp_returnsSoftError() {
         // more than 5 minutes (operational delta) before start
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
         var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200")
             .withTransactionData(List.of(meterValue("2026-02-17T08:54:59Z")));
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("at least one MeterValue.timestamp is before start.timestamp", result.getMessage());
+        assertSoftErrors(result, "at least one MeterValue.timestamp is before start.timestamp");
     }
 
     @Test
@@ -360,9 +416,9 @@ public class CentralSystemService16ServiceValidatorTest {
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
         var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200")
             .withTransactionData(List.of(meterValue("2026-02-17T08:55:01Z")));
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
@@ -370,9 +426,9 @@ public class CentralSystemService16ServiceValidatorTest {
         var tx = tx("100", DateTime.parse("2026-02-17T09:00:00Z"), null, null, null);
         var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200")
             .withTransactionData(List.of(meterValue("2026-02-17T09:00:00Z")));
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     /**
@@ -386,9 +442,9 @@ public class CentralSystemService16ServiceValidatorTest {
 
         var params = stopParams(DateTime.parse("2026-02-17T10:00:00Z"), "200")
             .withTransactionData(List.of(meterValue("2026-02-17T10:00:01Z")));
-        var result = validator.validateStop(tx, params);
+        var result = validator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     /**
@@ -400,7 +456,8 @@ public class CentralSystemService16ServiceValidatorTest {
         var messageClock = Clock.fixed(Instant.parse("2026-03-25T08:10:00Z"), ZoneOffset.UTC);
         var localValidator = new CentralSystemService16_ServiceValidator(messageClock);
 
-        var tx = tx("100", DateTime.parse("2026-03-25T06:22:44.000Z"), null, null, null);
+        var tx = tx("100", DateTime.parse("2026-03-25T06:22:44.000Z"), null, null, null)
+            .setIdTag("XYZ");
 
         StopTransactionRequest params = new StopTransactionRequest()
             .withIdTag("XYZ")
@@ -423,9 +480,9 @@ public class CentralSystemService16ServiceValidatorTest {
                     .withSampledValue(sampledValue("203", ReadingContext.TRANSACTION_END, ValueFormat.SIGNED_DATA))
             ));
 
-        var result = localValidator.validateStop(tx, params);
+        var result = localValidator.validateStop(tx, params, DIFFERENT_PARENTS);
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     /**
@@ -433,34 +490,34 @@ public class CentralSystemService16ServiceValidatorTest {
      * reasons for why they might not be: https://github.com/steve-community/steve/issues/1992
      */
     @Test
-    public void validateMeterValues_timestampsOutOfOrder_returnsNull() {
+    public void validateMeterValues_timestampsOutOfOrder_returnsValidResult() {
         var result = validator.validateMeterValues(meterValuesParams(1, List.of(
             meterValue("2026-02-17T10:00:00Z"),
             meterValue("2026-02-17T09:00:00Z")
         )));
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateMeterValues_timestampsInOrder_returnsNull() {
+    public void validateMeterValues_timestampsInOrder_returnsValidResult() {
         var result = validator.validateMeterValues(meterValuesParams(1, List.of(
             meterValue("2026-02-17T09:00:00Z"),
             meterValue("2026-02-17T09:30:00Z"),
             meterValue("2026-02-17T10:00:00Z")
         )));
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateMeterValues_sameTimestamps_returnsNull() {
+    public void validateMeterValues_sameTimestamps_returnsValidResult() {
         var result = validator.validateMeterValues(meterValuesParams(1, List.of(
             meterValue("2026-02-17T10:00:00Z"),
             meterValue("2026-02-17T10:00:00Z")
         )));
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
@@ -472,18 +529,52 @@ public class CentralSystemService16ServiceValidatorTest {
             null
         )));
 
-        Assertions.assertNull(result);
+        assertValid(result);
     }
 
     @Test
-    public void validateMeterValues_allNullElements_returnsError() {
+    public void validateMeterValues_allNullElements_returnsHardError() {
         // when all elements are null, all timestamps are filtered out → treated as empty
         var result = validator.validateMeterValues(meterValuesParams(1, Arrays.asList(
             null, null
         )));
 
-        Assertions.assertNotNull(result);
-        Assertions.assertEquals("MeterValue.timestamp is empty", result.getMessage());
+        assertHardErrors(result, "MeterValue.timestamp is empty");
+    }
+
+    private static void assertValid(CentralSystemService16_ServiceValidator.ValidationResults result) {
+        Assertions.assertAll(
+            () -> Assertions.assertTrue(result.isValid()),
+            () -> Assertions.assertEquals(List.of(), result.getSoftErrors()),
+            () -> Assertions.assertEquals(List.of(), result.getHardErrors())
+        );
+    }
+
+    private static void assertSoftErrors(
+        CentralSystemService16_ServiceValidator.ValidationResults result,
+        String... expectedErrors
+    ) {
+        assertErrors(result, List.of(expectedErrors), List.of());
+    }
+
+    private static void assertHardErrors(
+        CentralSystemService16_ServiceValidator.ValidationResults result,
+        String... expectedErrors
+    ) {
+        assertErrors(result, List.of(), List.of(expectedErrors));
+    }
+
+    private static void assertErrors(
+        CentralSystemService16_ServiceValidator.ValidationResults result,
+        List<String> expectedSoftErrors,
+        List<String> expectedHardErrors
+    ) {
+        Assertions.assertAll(
+            () -> Assertions.assertFalse(result.isValid()),
+            () -> Assertions.assertEquals(expectedSoftErrors, result.getSoftErrors()),
+            () -> Assertions.assertEquals(expectedHardErrors, result.getHardErrors()),
+            () -> Assertions.assertEquals(!expectedHardErrors.isEmpty(), result.hasHardErrors())
+        );
     }
 
     private static StopTransactionRequest stopParams(DateTime stopTimestamp, String meterStop) {
@@ -530,14 +621,12 @@ public class CentralSystemService16ServiceValidatorTest {
     private static TransactionRecord tx(String startValue, DateTime startTimestamp,
                                         String stopValue, DateTime stopTimestamp,
                                         TransactionStopEventActor stopActor) {
-        TransactionRecord tx = Mockito.mock(TransactionRecord.class);
-        Mockito.when(tx.getStartValue()).thenReturn(startValue);
-        Mockito.when(tx.getStartTimestamp()).thenReturn(startTimestamp);
-        Mockito.when(tx.getStopValue()).thenReturn(stopValue);
-        Mockito.when(tx.getStopTimestamp()).thenReturn(stopTimestamp);
-        Mockito.when(tx.getStopEventActor()).thenReturn(stopActor);
-        return tx;
+        return new TransactionRecord()
+            .setIdTag("tag-1")
+            .setStartValue(startValue)
+            .setStartTimestamp(startTimestamp)
+            .setStopValue(stopValue)
+            .setStopTimestamp(stopTimestamp)
+            .setStopEventActor(stopActor);
     }
-
-
 }

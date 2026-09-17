@@ -18,7 +18,7 @@
  */
 package de.rwth.idsg.steve.service;
 
-import de.rwth.idsg.steve.SteveException;
+import com.google.common.base.Strings;
 import de.rwth.idsg.steve.ocpp.OcppProtocol;
 import de.rwth.idsg.steve.repository.EventRepository;
 import de.rwth.idsg.steve.repository.OcppServerRepository;
@@ -28,9 +28,9 @@ import de.rwth.idsg.steve.repository.dto.InsertConnectorStatusParams;
 import de.rwth.idsg.steve.repository.dto.InsertTransactionParams;
 import de.rwth.idsg.steve.repository.dto.UpdateChargeboxParams;
 import de.rwth.idsg.steve.repository.dto.UpdateTransactionParams;
-import de.rwth.idsg.steve.service.notification.OccpStationBooted;
-import de.rwth.idsg.steve.service.notification.OcppStationStatusFailure;
-import de.rwth.idsg.steve.service.notification.OcppStationStatusSuspendedEV;
+import de.rwth.idsg.steve.service.dto.AuthTagContext;
+import de.rwth.idsg.steve.service.notification.OcppStationBooted;
+import de.rwth.idsg.steve.service.notification.OcppStationStatusUpdate;
 import de.rwth.idsg.steve.service.notification.OcppTransactionEnded;
 import de.rwth.idsg.steve.service.notification.OcppTransactionStarted;
 import jooq.steve.db.enums.TransactionStopEventActor;
@@ -79,7 +79,6 @@ import java.time.Instant;
 import java.util.Optional;
 
 import static ocpp.cs._2015._10.ChargePointStatus.FAULTED;
-import static ocpp.cs._2015._10.ChargePointStatus.SUSPENDED_EV;
 import static ocpp.cs._2015._10.ChargePointStatus.UNAVAILABLE;
 
 /**
@@ -106,7 +105,7 @@ public class CentralSystemService16_Service {
                                                      OcppProtocol ocppProtocol) {
 
         Optional<RegistrationStatus> status = chargePointService.getRegistrationStatus(chargeBoxIdentity);
-        applicationEventPublisher.publishEvent(new OccpStationBooted(chargeBoxIdentity, status));
+        applicationEventPublisher.publishEvent(new OcppStationBooted(chargeBoxIdentity, status));
         DateTime now = DateTime.now();
 
         if (status.isEmpty()) {
@@ -150,9 +149,9 @@ public class CentralSystemService16_Service {
     public StatusNotificationResponse statusNotification(
             StatusNotificationRequest parameters, String chargeBoxIdentity) {
 
-        var exception = serviceValidator.validateStatusNotification(parameters);
-        if (exception != null) {
-            log.warn("StatusNotification validation failed: {}", exception.getMessage(), exception);
+        var results = serviceValidator.validateStatusNotification(parameters);
+        if (results.hasHardErrors()) {
+            return new StatusNotificationResponse();
         }
 
         // Optional field
@@ -172,16 +171,6 @@ public class CentralSystemService16_Service {
 
         ocppServerRepository.insertConnectorStatus(params);
 
-        if (parameters.getStatus() == FAULTED) {
-            applicationEventPublisher.publishEvent(new OcppStationStatusFailure(
-                    chargeBoxIdentity, parameters.getConnectorId(), parameters.getErrorCode().value()));
-        }
-
-         if (parameters.getStatus() == SUSPENDED_EV) {
-            applicationEventPublisher.publishEvent(new OcppStationStatusSuspendedEV(
-                    chargeBoxIdentity, parameters.getConnectorId(), timestamp));
-        }
-
         // https://github.com/steve-community/steve/issues/1398
         // OCPP 1.6: "A reservation SHALL be terminated on the Charge Point when [...]
         // the Charge Point or connector are set to Faulted or Unavailable."
@@ -189,22 +178,28 @@ public class CentralSystemService16_Service {
             reservationRepository.cancelActiveReservations(chargeBoxIdentity, parameters.getConnectorId());
         }
 
+        applicationEventPublisher.publishEvent(new OcppStationStatusUpdate(
+            chargeBoxIdentity,
+            parameters.getConnectorId(),
+            parameters.getStatus(),
+            parameters.getErrorCode(),
+            timestamp
+        ));
+
         return new StatusNotificationResponse();
     }
 
     public MeterValuesResponse meterValues(MeterValuesRequest parameters, String chargeBoxIdentity) {
         Integer transactionId = getTransactionId(parameters);
 
-        SteveException exception;
-        if (transactionId == null) {
-            exception = serviceValidator.validateMeterValues(parameters);
-        } else {
-            var transaction = ocppServerRepository.getTransaction(chargeBoxIdentity, parameters.getConnectorId(), transactionId);
-            exception = serviceValidator.validateMeterValues(parameters, transaction);
-        }
-
-        if (exception != null) {
-            log.warn("MeterValues validation failed: {}", exception.getMessage(), exception);
+        var results = (transactionId == null)
+            ? serviceValidator.validateMeterValues(parameters)
+            : serviceValidator.validateMeterValues(
+                parameters,
+                ocppServerRepository.getTransaction(chargeBoxIdentity, parameters.getConnectorId(), transactionId)
+            );
+        if (results.hasHardErrors()) {
+            return new MeterValuesResponse();
         }
 
         ocppServerRepository.insertMeterValues(
@@ -228,7 +223,7 @@ public class CentralSystemService16_Service {
         // Get the authorization info of the user, before making tx changes (will affectAuthorizationStatus)
         IdTagInfo info = ocppTagService.getIdTagInfo(
                 parameters.getIdTag(),
-                true,
+                AuthTagContext.StationStartTx,
                 chargeBoxIdentity,
                 parameters.getConnectorId(),
                 () -> new IdTagInfo().withStatus(AuthorizationStatus.INVALID) // IdTagInfo is required
@@ -245,10 +240,7 @@ public class CentralSystemService16_Service {
                                        .eventTimestamp(DateTime.now())
                                        .build();
 
-        var exception = serviceValidator.validateStart(parameters);
-        if (exception != null) {
-            log.warn("StartTransaction validation failed: {}", exception.getMessage(), exception);
-        }
+        serviceValidator.validateStart(parameters);
 
         int transactionId = ocppServerRepository.insertTransaction(params);
 
@@ -264,9 +256,11 @@ public class CentralSystemService16_Service {
         String stopReason = parameters.isSetReason() ? parameters.getReason().value() : null;
 
         // Get the authorization info of the user, before making tx changes (will affectAuthorizationStatus)
-        IdTagInfo idTagInfo = ocppTagService.getIdTagInfo(
+        IdTagInfo idTagInfo = Strings.isNullOrEmpty(parameters.getIdTag())
+            ? null
+            : ocppTagService.getIdTagInfo(
                 parameters.getIdTag(),
-                false,
+                AuthTagContext.StationStopTx,
                 chargeBoxIdentity,
                 null,
                 () -> null
@@ -284,17 +278,16 @@ public class CentralSystemService16_Service {
                                        .build();
 
         var transaction = ocppServerRepository.getTransaction(chargeBoxIdentity, null, transactionId);
-        var exception = serviceValidator.validateStop(transaction, parameters);
+        var results = serviceValidator.validateStop(transaction, parameters, ocppTagService::areIdTagsRelatedByParent);
 
-        if (exception == null) {
+        if (results.hasHardErrors()) {
+            ocppServerRepository.updateTransactionAsFailed(params, results.getHardErrors());
+            // TODO: we need to handle meter values of invalid stops differently. will come later.
+            ocppServerRepository.insertMeterValues(chargeBoxIdentity, parameters.getTransactionData(), transaction);
+        } else {
             ocppServerRepository.updateTransaction(params);
             ocppServerRepository.insertMeterValues(chargeBoxIdentity, parameters.getTransactionData(), transaction);
             applicationEventPublisher.publishEvent(new OcppTransactionEnded(params));
-        } else {
-            log.warn("StopTransaction validation failed: {}", exception.getMessage(), exception);
-            ocppServerRepository.updateTransactionAsFailed(params, exception);
-            // TODO: we need to handle meter values of invalid stops differently. will come later.
-            ocppServerRepository.insertMeterValues(chargeBoxIdentity, parameters.getTransactionData(), transaction);
         }
 
         return new StopTransactionResponse().withIdTagInfo(idTagInfo);
@@ -311,7 +304,7 @@ public class CentralSystemService16_Service {
         // Get the authorization info of the user
         IdTagInfo idTagInfo = ocppTagService.getIdTagInfo(
                 parameters.getIdTag(),
-                false,
+                AuthTagContext.StationAuth,
                 chargeBoxIdentity,
                 null,
                 () -> new IdTagInfo().withStatus(AuthorizationStatus.INVALID)
@@ -369,9 +362,9 @@ public class CentralSystemService16_Service {
 
     public SecurityEventNotificationResponse securityEventNotification(SecurityEventNotification parameters,
                                                                        String chargeBoxIdentity) {
-        var exception = serviceValidator.validateSecurityEvent(parameters);
-        if (exception != null) {
-            log.warn("SecurityEvent validation failed: {}", exception.getMessage(), exception);
+        var results = serviceValidator.validateSecurityEvent(parameters);
+        if (results.hasHardErrors()) {
+            return new SecurityEventNotificationResponse();
         }
 
         try {

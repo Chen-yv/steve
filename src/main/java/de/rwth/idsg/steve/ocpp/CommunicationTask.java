@@ -36,6 +36,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -49,6 +50,7 @@ public abstract class CommunicationTask<S extends ChargePointSelection, RESPONSE
 
     private final Logger log = LoggerFactory.getLogger(getClass());
 
+    private final UUID taskUuid = UUID.randomUUID();
     private final String operationName;
     private final TaskOrigin origin;
     private final String caller;
@@ -171,6 +173,14 @@ public abstract class CommunicationTask<S extends ChargePointSelection, RESPONSE
             case V_12 -> getOcpp12Handler(chargeBoxId);
             case V_15 -> getOcpp15Handler(chargeBoxId);
             case V_16 -> getOcpp16Handler(chargeBoxId);
+        };
+    }
+
+    public <T extends RequestType> T getOcppRequest(String chargeBoxId) {
+        return switch (versionMap.get(chargeBoxId)) {
+            case V_12 -> getOcpp12Request();
+            case V_15 -> getOcpp15Request();
+            case V_16 -> getOcpp16Request();
         };
     }
 

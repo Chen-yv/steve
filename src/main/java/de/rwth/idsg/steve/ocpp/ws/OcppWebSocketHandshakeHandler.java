@@ -25,6 +25,7 @@ import de.rwth.idsg.steve.service.ChargePointService;
 import de.rwth.idsg.steve.web.validation.ChargeBoxIdValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
@@ -32,9 +33,9 @@ import org.springframework.http.server.ServletServerHttpRequest;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.web.authentication.www.BasicAuthenticationConverter;
 import org.springframework.util.CollectionUtils;
+import org.springframework.web.socket.SubProtocolCapable;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.WebSocketHttpHeaders;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 import org.springframework.web.socket.server.HandshakeFailureException;
 import org.springframework.web.socket.server.HandshakeHandler;
 import org.springframework.web.socket.server.support.DefaultHandshakeHandler;
@@ -55,20 +56,12 @@ public class OcppWebSocketHandshakeHandler implements HandshakeHandler {
 
     private final ChargeBoxIdValidator chargeBoxIdValidator;
     private final DefaultHandshakeHandler delegate;
-    private final List<AbstractWebSocketEndpoint> endpoints;
+    private final SubProtocolCapable subProtocolCapable;
     private final ChargePointService chargePointService;
     private final CertificateValidator certificateValidator;
+    private final String protocolHeaderFromProxy;
 
     private final BasicAuthenticationConverter converter = new BasicAuthenticationConverter();
-
-    /**
-     * We need some WebSocketHandler just for Spring to register it for the path. We will not use it for the actual
-     * operations. This instance will be passed to doHandshake(..) below. We will find the proper WebSocketEndpoint
-     * based on the selectedProtocol and replace the dummy one with the proper one in the subsequent call chain.
-     */
-    public WebSocketHandler getDummyWebSocketHandler() {
-        return new TextWebSocketHandler();
-    }
 
     @Override
     public boolean doHandshake(ServerHttpRequest request, ServerHttpResponse response,
@@ -111,6 +104,7 @@ public class OcppWebSocketHandshakeHandler implements HandshakeHandler {
         // 2. Check Ocpp security profiles (if needed)
         // -------------------------------------------------------------------------
 
+        boolean isSecure = isSecure(request);
         OcppSecurityProfile profile = registration.get().securityProfile();
         log.debug("ChargeBoxId '{}' is found in DB with security profile {}", chargeBoxId, profile.getValue());
 
@@ -118,6 +112,13 @@ public class OcppWebSocketHandshakeHandler implements HandshakeHandler {
         if (profile.isBasicAuth()) {
             log.debug("ChargeBoxId '{}' is attempting Basic-Auth...", chargeBoxId);
             ServletServerHttpRequest casted = (ServletServerHttpRequest) request;
+
+            // prevent profile 1 type behavior when profile 2 is configured
+            if (profile == OcppSecurityProfile.Profile_2 && !isSecure) {
+                log.warn("ChargeBoxId '{}' is trying to connect via plain WS, even though it is configured for profile 2. Rejecting.", chargeBoxId);
+                response.setStatusCode(HttpStatus.UNAUTHORIZED);
+                return false;
+            }
 
             UsernamePasswordAuthenticationToken authentication;
             try {
@@ -163,27 +164,50 @@ public class OcppWebSocketHandshakeHandler implements HandshakeHandler {
             return false;
         }
 
-        AbstractWebSocketEndpoint endpoint = selectEndpoint(requestedProtocols);
+        String version = selectVersion(requestedProtocols);
 
-        if (endpoint == null) {
+        if (version == null) {
             log.error("ChargeBoxId '{}': None of the requested protocols '{}' is supported", chargeBoxId, requestedProtocols);
             response.setStatusCode(HttpStatus.NOT_FOUND);
             return false;
         }
 
-        attributes.put(AbstractWebSocketEndpoint.CHARGEBOX_ID_KEY, chargeBoxId);
-        log.debug("ChargeBoxId '{}' will be using {}", chargeBoxId, endpoint.getClass().getSimpleName());
-        return delegate.doHandshake(request, response, endpoint, attributes);
+        attributes.put(WebSocketEndpoint.CHARGEBOX_ID_KEY, chargeBoxId);
+
+        log.debug("ChargeBoxId '{}' will be using {}", chargeBoxId, version);
+        return delegate.doHandshake(request, response, wsHandler, attributes);
     }
 
-    private AbstractWebSocketEndpoint selectEndpoint(List<String> requestedProtocols ) {
+    /**
+     * Selects the OCPP version for the first supported protocol in the station's preference order. Since requested
+     * protocols are evaluated before versions (because we iterate over requestedProtocols in the outer loop),
+     * the station's preference order dominates the version collection's order (i.e. the order of versions
+     * does not matter).
+     *
+     * @return the selected OCPP version, or {@code null} if none of the requested protocols is supported
+     */
+    private String selectVersion(List<String> requestedProtocols) {
+        List<String> supportedProtocols = subProtocolCapable.getSubProtocols();
         for (String requestedProtocol : requestedProtocols) {
-            for (AbstractWebSocketEndpoint item : endpoints) {
-                if (item.getVersion().getValue().equals(requestedProtocol)) {
+            for (String item : supportedProtocols) {
+                if (item.equals(requestedProtocol)) {
                     return item;
                 }
             }
         }
         return null;
+    }
+
+    private boolean isSecure(ServerHttpRequest request) {
+        // if behind a TLS-terminating proxy, consider forwarded headers first
+        if (!StringUtils.isEmpty(protocolHeaderFromProxy)) {
+            String forwardedProto = request.getHeaders().getFirst(protocolHeaderFromProxy);
+            if ("https".equalsIgnoreCase(forwardedProto) || "wss".equalsIgnoreCase(forwardedProto)) {
+                return true;
+            }
+        }
+
+        var scheme = request.getURI().getScheme();
+        return "https".equalsIgnoreCase(scheme) || "wss".equalsIgnoreCase(scheme);
     }
 }

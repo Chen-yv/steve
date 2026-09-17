@@ -18,12 +18,9 @@
  */
 package de.rwth.idsg.steve.service;
 
-import static de.rwth.idsg.steve.utils.OcppTagActivityRecordUtils.isBlocked;
-import static de.rwth.idsg.steve.utils.OcppTagActivityRecordUtils.isExpired;
-
-import com.google.common.base.Strings;
 import de.rwth.idsg.steve.repository.OcppTagRepository;
 import de.rwth.idsg.steve.repository.dto.OcppTag;
+import de.rwth.idsg.steve.service.dto.AuthTagContext;
 import de.rwth.idsg.steve.service.dto.UnidentifiedIncomingObject;
 import de.rwth.idsg.steve.web.dto.OcppTagForm;
 import de.rwth.idsg.steve.web.dto.OcppTagQueryForm;
@@ -33,13 +30,18 @@ import lombok.extern.slf4j.Slf4j;
 import ocpp.cp._2015._10.AuthorizationData;
 import ocpp.cs._2015._10.AuthorizationStatus;
 import ocpp.cs._2015._10.IdTagInfo;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.joda.time.DateTime;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
+
+import static de.rwth.idsg.steve.utils.OcppTagActivityRecordUtils.isBlocked;
+import static de.rwth.idsg.steve.utils.OcppTagActivityRecordUtils.isExpired;
 
 /**
  * @author Sevket Goekay <sevketgokay@gmail.com>
@@ -84,7 +86,32 @@ public class OcppTagService {
     }
 
     public String getParentIdtag(String idTag) {
-        return ocppTagRepository.getParentIdtag(idTag);
+        var map = ocppTagRepository.getParentIdTags(Set.of(idTag));
+        return map.get(idTag);
+    }
+
+    /**
+     * Checks whether two distinct idTags are related through {@code parentIdTag}. Exact idTag equality is handled by
+     * the caller before invoking this method.
+     * <pre>
+     * Relationship                           Example                          Result
+     * ------------------------------------------------------------------------------
+     * Same non-null parent                   C1.parent=P, C2.parent=P         true
+     * First tag is the second tag's parent   P.parent=null, C.parent=P        true
+     * Second tag is the first tag's parent   C.parent=P, P.parent=null        true
+     * Different parents                      C1.parent=P1, C2.parent=P2       false
+     * Both tags are parentless               P1.parent=null, P2.parent=null   false
+     * Either tag is unknown                  No database record               false
+     * </pre>
+     */
+    public boolean areIdTagsRelatedByParent(@NotNull String idTag1, @NotNull String idTag2) {
+        var parents = ocppTagRepository.getParentIdTags(Set.of(idTag1, idTag2));
+        var parent1 = parents.get(idTag1);
+        var parent2 = parents.get(idTag2);
+
+        return (parent1 != null && parent1.equals(parent2))
+            || idTag1.equals(parent2)
+            || idTag2.equals(parent1);
     }
 
     public List<AuthorizationData> getAuthDataOfAllTags() {
@@ -105,14 +132,9 @@ public class OcppTagService {
         invalidOcppTagService.removeAll(idTagList);
     }
 
-    @Nullable
-    public IdTagInfo getIdTagInfo(@Nullable String idTag, boolean isStartTransactionReqContext,
-                                  @Nullable String chargeBoxId, @Nullable Integer connectorId) {
-        if (Strings.isNullOrEmpty(idTag)) {
-            return null;
-        }
-
-        IdTagInfo idTagInfo = authTagService.decideStatus(idTag, isStartTransactionReqContext, chargeBoxId, connectorId);
+    public IdTagInfo getIdTagInfo(String idTag, AuthTagContext authTagContext,
+                                  String chargeBoxId, @Nullable Integer connectorId) {
+        IdTagInfo idTagInfo = authTagService.decideStatus(idTag, authTagContext, chargeBoxId, connectorId);
 
         if (idTagInfo.getStatus() == AuthorizationStatus.INVALID) {
             invalidOcppTagService.processNewUnidentified(idTag);
@@ -122,11 +144,11 @@ public class OcppTagService {
     }
 
     @Nullable
-    public IdTagInfo getIdTagInfo(@Nullable String idTag, boolean isStartTransactionReqContext,
-                                  @Nullable String chargeBoxId, @Nullable Integer connectorId,
+    public IdTagInfo getIdTagInfo(String idTag, AuthTagContext authTagContext,
+                                  String chargeBoxId, @Nullable Integer connectorId,
                                   Supplier<IdTagInfo> supplierWhenException) {
         try {
-            return getIdTagInfo(idTag, isStartTransactionReqContext, chargeBoxId, connectorId);
+            return getIdTagInfo(idTag, authTagContext, chargeBoxId, connectorId);
         } catch (Exception e) {
             log.error("Exception occurred", e);
             return supplierWhenException.get();

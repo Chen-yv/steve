@@ -24,6 +24,8 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Duration;
+
 /**
  * @author Sevket Goekay <sevketgokay@gmail.com>
  * @since 19.08.2014
@@ -68,6 +70,8 @@ public class SteveProperties {
         boolean autoRegisterUnknownStations;
         String chargeBoxIdValidationRegex;
         Protocols enabledProtocols;
+        boolean octtQuirksEnabled;
+        Duration wsPingInterval = Duration.ofMinutes(15);
         Security security = new Security();
 
         @Data
@@ -90,6 +94,7 @@ public class SteveProperties {
         @Data
         public static class Security {
             private String clientCertHeaderFromProxy;
+            private String protocolHeaderFromProxy;
             private CsrSigning csrSigning = new CsrSigning();
 
             @Data
@@ -111,6 +116,7 @@ public class SteveProperties {
                     public static class IssuerConfig {
                         private String caCertificatePem;
                         private String caKeyPem;
+                        private String caKeyPassword;
 
                         /**
                          * Optional PEM bundle for issuer chain in order:

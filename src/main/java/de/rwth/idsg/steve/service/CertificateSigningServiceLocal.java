@@ -66,6 +66,7 @@ import java.util.List;
 
 import static de.rwth.idsg.steve.utils.CertificateUtils.certificatesToPEM;
 import static de.rwth.idsg.steve.utils.CertificateUtils.isSameKeyFamily;
+import static de.rwth.idsg.steve.utils.CertificateUtils.parsePrivateKeyViaBouncyCastle;
 import static de.rwth.idsg.steve.utils.CertificateUtils.resolveSignatureAlgorithm;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static jooq.steve.db.enums.CertificateSignatureAlgorithm.ECDSA;
@@ -84,6 +85,7 @@ public class CertificateSigningServiceLocal implements CertificateSigningService
     private final ChargePointService chargePointService;
     private final ChargePointServiceClient chargePointServiceClient;
     private final CertificateValidator certificateValidator;
+    private final boolean octtQuirksEnabled;
 
     private final EnumMap<CertificateSignatureAlgorithm, CertificateIssuerMaterial> issuers = new EnumMap<>(CertificateSignatureAlgorithm.class);
     private final int certificateValidityYears;
@@ -100,6 +102,7 @@ public class CertificateSigningServiceLocal implements CertificateSigningService
         this.chargePointService = chargePointService;
         this.chargePointServiceClient = chargePointServiceClient;
         this.certificateValidator = certificateValidator;
+        this.octtQuirksEnabled = steveProperties.getOcpp().isOcttQuirksEnabled();
 
         var csrSigningProps = steveProperties.getOcpp().getSecurity().getCsrSigning().getProviderLocal();
         if (!csrSigningProps.isValid()) {
@@ -283,9 +286,9 @@ public class CertificateSigningServiceLocal implements CertificateSigningService
         }
 
         var caCertificate = resolveResource(resourceLoader, issuerConfig.getCaCertificatePem(), CertificateUtils::parseCertificate);
-        var caPrivateKey = resolveResource(resourceLoader, issuerConfig.getCaKeyPem(), CertificateUtils::parsePrivateKeyViaBouncyCastle);
+        var caPrivateKey = resolveResource(resourceLoader, issuerConfig.getCaKeyPem(), pem -> parsePrivateKeyViaBouncyCastle(pem, issuerConfig.getCaKeyPassword()));
         var issuerCertificateChain = loadIssuerCertificateChain(resourceLoader, caCertificate, issuerConfig.getCaChainPem());
-        var certificateSignatureAlgorithm = resolveSignatureAlgorithm(caPrivateKey);
+        var certificateSignatureAlgorithm = resolveSignatureAlgorithm(caPrivateKey, octtQuirksEnabled);
 
         var issuer = new CertificateIssuerMaterial(
             name,
@@ -296,7 +299,7 @@ public class CertificateSigningServiceLocal implements CertificateSigningService
         );
 
         issuer.validateFamily();
-        issuer.validateCaCertificate();
+        issuer.validateCaCertificate(octtQuirksEnabled);
         issuer.validateCertificateChain();
 
         issuers.put(name, issuer);
@@ -337,17 +340,23 @@ public class CertificateSigningServiceLocal implements CertificateSigningService
     }
 
     private List<X509Certificate> loadIssuerCertificateChain(ResourceLoader resourceLoader,
-                                                            X509Certificate caCertificate,
-                                                            String caChainPem) throws Exception {
+                                                             X509Certificate caCertificate,
+                                                             String caChainPem) throws Exception {
         return StringUtils.isBlank(caChainPem)
             ? List.of(caCertificate)
             : resolveResource(resourceLoader, caChainPem, CertificateUtils::parseCertificates);
     }
 
     private static <T> T resolveResource(ResourceLoader resourceLoader, String location, ThrowingFunction<String, T> converter) throws Exception {
-        var resource = ResourceUtils.isUrl(location)
-            ? resourceLoader.getResource(location)
-            : resourceLoader.getResource("file:" + location);
+        var resource = resourceLoader.getResource(location);
+
+        if (!resource.exists() && !ResourceUtils.isUrl(location)) {
+            resource = resourceLoader.getResource("classpath:" + location);
+        }
+
+        if (!resource.exists() && !ResourceUtils.isUrl(location)) {
+            resource = resourceLoader.getResource("file:" + location);
+        }
 
         if (!resource.exists()) {
             throw new IllegalArgumentException("Signing certificate PEM resource does not exist: " + location);

@@ -16,20 +16,26 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-package de.rwth.idsg.steve.service.notification;
+package de.rwth.idsg.steve.web.validation;
 
-import lombok.Data;
-import org.joda.time.DateTime;
+import jakarta.validation.Constraint;
+import jakarta.validation.Payload;
 
-/**
- * @author fnkbsi
- * @since 12.10.2022
- */
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
 
-@Data
-public class OcppStationStatusSuspendedEV {
+import static java.lang.annotation.ElementType.FIELD;
+import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
-  private final String chargeBoxId;
-  private final int connectorId;
-  private final DateTime timestamp;
+@Target({FIELD, METHOD})
+@Retention(RUNTIME)
+@Constraint(validatedBy = TimeZoneIdValidator.class)
+public @interface TimeZoneId {
+
+    String message() default "Not a valid time zone";
+
+    Class<?>[] groups() default {};
+
+    Class<? extends Payload>[] payload() default {};
 }

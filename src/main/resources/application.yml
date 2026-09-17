@@ -49,6 +49,10 @@ steve:
     auto-register-unknown-stations: ${auto.register.unknown.stations}
     charge-box-id-validation-regex: ${charge-box-id.validation.regex}
 
+    # Enables compatibility workarounds for OCTT-based OCA certification testing.
+    # These workarounds alter otherwise OCPP-compliant behavior to accommodate OCTT-specific expectations.
+    octt-quirks-enabled: false
+
     # Which transport (SOAP and JSON-over-WebSocket) of which OCPP version (1.2, 1.5 and 1.6) should we enable?
     # This configuration affects the endpoints we expose for station communication, but also the corresponding web page
     # for OCPP operations (e.g. if soap and json both are disabled for v12, OCPP 1.2 Operations page will be disabled).
@@ -57,9 +61,17 @@ steve:
       v15: { soap: true, json: true }
       v16: { soap: true, json: true }
 
+    # SteVe pings every open WebSocket session at this interval, so that connections which are idle on the
+    # OCPP level are not dropped by the station, or by an intermediary such as a proxy, a load balancer or
+    # a NAT gateway. Managed proxies often close idle WebSockets after 60 to 100 seconds, which is well
+    # below our default. Keep it under the Jetty idle timeout, minimum 1s, or 0 to disable pings entirely.
+    ws-ping-interval: 15m
+
     # OCPP 1.6 security config.
     # Note: security profile (0..3) is a per-charge-point state in DB, not a global application property.
     security:
+      # the custom header with original protocol info forwarded by proxy
+      protocol-header-from-proxy:
       # Relevant for stations with profile 3
       # See de.rwth.idsg.steve.service.CertificateValidator for documentation
       client-cert-header-from-proxy:
@@ -74,8 +86,10 @@ steve:
           rsa:
             ca-certificate-pem:
             ca-key-pem:
+            ca-key-password:
             ca-chain-pem:
           ecdsa:
             ca-certificate-pem:
             ca-key-pem:
+            ca-key-password:
             ca-chain-pem:

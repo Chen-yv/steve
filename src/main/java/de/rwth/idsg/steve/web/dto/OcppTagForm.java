@@ -27,7 +27,7 @@ import lombok.ToString;
 import org.joda.time.DateTime;
 
 import jakarta.validation.constraints.Future;
-import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.Size;
 
 import java.util.Objects;
 
@@ -46,8 +46,8 @@ public class OcppTagForm {
     private Integer ocppTagPk;
 
     @Schema(description = "Will be used in create/insert flows. Will be ignored in update flows.")
-    @NotEmpty(message = "ID Tag is required")
     @IdTag
+    @Size(min = 1, max = IdTag.MAX_LENGTH)
     private String idTag;
 
     // Is a FK in DB table. No validation needed. Operation will fail if DB constraint fails.

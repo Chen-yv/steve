@@ -16,14 +16,32 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-package de.rwth.idsg.steve.service.notification;
+package de.rwth.idsg.steve.web.dto;
 
-import lombok.Data;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 
-@Data
-public class OcppStationStatusFailure {
+public class AddressTest {
 
-  private final String chargeBoxId;
-  private final int connectorId;
-  private final String errorCode;
+    @Test
+    public void emptyAddress() {
+        Assertions.assertTrue(new Address().isEmpty());
+    }
+
+    @Test
+    public void addressWithTimeZoneIsNotEmpty() {
+        var address = new Address();
+        address.setTimeZone("Europe/Berlin");
+
+        Assertions.assertFalse(address.isEmpty());
+    }
+
+    @Test
+    public void emptyTimeZoneIsNormalizedToNull() {
+        var address = new Address();
+        address.setTimeZone("");
+
+        Assertions.assertNull(address.getTimeZone());
+        Assertions.assertTrue(address.isEmpty());
+    }
 }

@@ -16,31 +16,21 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-package de.rwth.idsg.steve.web.validation;
+package de.rwth.idsg.steve.utils.mapper;
 
-import jakarta.validation.Constraint;
-import jakarta.validation.Payload;
-import java.lang.annotation.Retention;
-import java.lang.annotation.Target;
+import jooq.steve.db.tables.records.AddressRecord;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 
-import static java.lang.annotation.ElementType.FIELD;
-import static java.lang.annotation.ElementType.METHOD;
-import static java.lang.annotation.RetentionPolicy.RUNTIME;
+public class AddressMapperTest {
 
-/**
- * @author Sevket Goekay <sevketgokay@gmail.com>
- * @since 21.01.2016
- */
-@Target({FIELD, METHOD})
-@Retention(RUNTIME)
-@Constraint(validatedBy = EmailCollectionValidator.class)
-public @interface EmailCollection {
+    @Test
+    public void recordToDtoCopiesTimeZone() {
+        var record = new AddressRecord();
+        record.setTimeZone("Europe/Berlin");
 
-    String message() default "E-mail(s) not valid";
+        var address = AddressMapper.recordToDto(record);
 
-    // Required by validation runtime
-    Class<?>[] groups() default {};
-
-    // Required by validation runtime
-    Class<? extends Payload>[] payload() default {};
+        Assertions.assertEquals("Europe/Berlin", address.getTimeZone());
+    }
 }

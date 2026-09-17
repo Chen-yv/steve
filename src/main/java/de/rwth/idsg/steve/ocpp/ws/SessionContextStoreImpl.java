@@ -20,17 +20,17 @@ package de.rwth.idsg.steve.ocpp.ws;
 
 import com.google.common.util.concurrent.Striped;
 import de.rwth.idsg.steve.SteveException;
-import de.rwth.idsg.steve.config.WebSocketConfiguration;
 import de.rwth.idsg.steve.ocpp.ws.custom.WsSessionSelectStrategy;
 import de.rwth.idsg.steve.ocpp.ws.data.SessionContext;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.joda.time.DateTime;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Collection;
@@ -48,7 +48,6 @@ import java.util.concurrent.locks.Lock;
  * @since 17.03.2015
  */
 @Slf4j
-@RequiredArgsConstructor
 public class SessionContextStoreImpl implements SessionContextStore {
 
     /**
@@ -60,9 +59,31 @@ public class SessionContextStoreImpl implements SessionContextStore {
 
     private final Striped<Lock> locks = Striped.lock(128);
 
+    /**
+     * A sub-second server-side ping is not a keep-alive, it is a flood. {@link Duration#ZERO} disables
+     * pinging altogether.
+     */
+    private static final Duration MIN_PING_INTERVAL = Duration.ofSeconds(1);
+
     private final WsSessionSelectStrategy wsSessionSelectStrategy;
+    private final Duration pingInterval;
     private final TaskScheduler taskScheduler;
     private final FutureResponseContextStore futureResponseContextStore;
+
+    public SessionContextStoreImpl(WsSessionSelectStrategy wsSessionSelectStrategy,
+                                   Duration pingInterval,
+                                   TaskScheduler taskScheduler,
+                                   FutureResponseContextStore futureResponseContextStore) {
+        if (!pingInterval.isZero() && pingInterval.compareTo(MIN_PING_INTERVAL) < 0) {
+            throw new IllegalArgumentException(
+                "Ping interval must be at least " + MIN_PING_INTERVAL + ", or 0 to disable, but was " + pingInterval);
+        }
+
+        this.wsSessionSelectStrategy = wsSessionSelectStrategy;
+        this.pingInterval = pingInterval;
+        this.taskScheduler = taskScheduler;
+        this.futureResponseContextStore = futureResponseContextStore;
+    }
 
     @Override
     public boolean add(String chargeBoxId, WebSocketSession session) {
@@ -74,15 +95,7 @@ public class SessionContextStoreImpl implements SessionContextStore {
                 return false; // we dont want to trigger any action based on this 'bad' session which we did not process anyway
             }
 
-            // Just to keep the connection alive, such that the servers do not close
-            // the connection because of a idle timeout, we ping-pong at fixed intervals.
-            ScheduledFuture<?> pingSchedule = taskScheduler.scheduleAtFixedRate(
-                new PingTask(chargeBoxId, session),
-                Instant.now().plus(WebSocketConfiguration.PING_INTERVAL),
-                WebSocketConfiguration.PING_INTERVAL
-            );
-
-            SessionContext context = new SessionContext(session, pingSchedule, DateTime.now());
+            SessionContext context = new SessionContext(session, schedulePing(chargeBoxId, session), DateTime.now());
 
             Deque<SessionContext> endpointDeque = lookupTable.computeIfAbsent(chargeBoxId, str -> new ArrayDeque<>());
             endpointDeque.addLast(context); // Adding at the end
@@ -112,7 +125,7 @@ public class SessionContextStoreImpl implements SessionContextStore {
             for (var it = endpointDeque.iterator(); it.hasNext();) {
                 SessionContext context = it.next();
                 if (context.getSession().getId().equals(session.getId())) {
-                    context.getPingSchedule().cancel(true);
+                    cancelPing(context);
                     it.remove();
                     log.debug("A SessionContext is removed for chargeBoxId '{}'. Store size: {}", chargeBoxId, endpointDeque.size());
                     break;
@@ -134,6 +147,30 @@ public class SessionContextStoreImpl implements SessionContextStore {
         }
     }
 
+    /**
+     * Just to keep the connection alive, such that the servers do not close the connection because of a
+     * idle timeout, we ping-pong at fixed intervals. Returns null when the operator disabled pinging.
+     */
+    @Nullable
+    private ScheduledFuture<?> schedulePing(String chargeBoxId, WebSocketSession session) {
+        if (pingInterval.isZero()) {
+            return null;
+        }
+
+        return taskScheduler.scheduleAtFixedRate(
+            new PingTask(chargeBoxId, session),
+            Instant.now().plus(pingInterval),
+            pingInterval
+        );
+    }
+
+    private static void cancelPing(SessionContext context) {
+        ScheduledFuture<?> pingSchedule = context.getPingSchedule();
+        if (pingSchedule != null) {
+            pingSchedule.cancel(true);
+        }
+    }
+
     @Override
     public WebSocketSession getSession(String chargeBoxId) {
         Lock l = locks.get(chargeBoxId);
@@ -152,11 +189,64 @@ public class SessionContextStoreImpl implements SessionContextStore {
     }
 
     @Override
-    public Boolean registerIncomingCallId(String chargeBoxId, WebSocketSession session, @NotNull String messageId) {
+    @Nullable
+    public WebSocketSession getSession(String chargeBoxId, String webSocketSessionId) {
         Lock l = locks.get(chargeBoxId);
         l.lock();
         try {
-            return messageIdStore.registerIncomingCallId(session, messageId);
+            Deque<SessionContext> endpointDeque = lookupTable.get(chargeBoxId);
+            if (endpointDeque == null) {
+                return null;
+            }
+            for (SessionContext context : endpointDeque) {
+                if (context.getSession().getId().equals(webSocketSessionId)) {
+                    return context.getSession();
+                }
+            }
+            return null;
+        } finally {
+            l.unlock();
+        }
+    }
+
+    @Override
+    public Boolean registerIncomingCallId(String chargeBoxId, String webSocketSessionId, @NotNull String messageId) {
+        Lock l = locks.get(chargeBoxId);
+        l.lock();
+        try {
+            return messageIdStore.registerIncomingCallId(webSocketSessionId, messageId);
+        } finally {
+            l.unlock();
+        }
+    }
+
+    @Override
+    public boolean closeSession(String chargeBoxId, String sessionId) {
+        Lock l = locks.get(chargeBoxId);
+        l.lock();
+        try {
+            Deque<SessionContext> endpointDeque = lookupTable.get(chargeBoxId);
+            if (endpointDeque == null) {
+                log.warn("Could not find chargeBoxId '{}' while closing session '{}'", chargeBoxId, sessionId);
+                return false;
+            }
+
+            for (SessionContext sessionContext : endpointDeque) {
+                WebSocketSession session = sessionContext.getSession();
+                if (session.getId().equals(sessionId)) {
+                    try {
+                        log.info("Closing session '{}' for chargeBoxId '{}'", sessionId, chargeBoxId);
+                        session.close();
+                        return true;
+                    } catch (IOException e) {
+                        log.error("Error while closing session '{}' for chargeBoxId '{}'", sessionId, chargeBoxId, e);
+                        return false;
+                    }
+                }
+            }
+
+            log.warn("Could not find session '{}' for chargeBoxId '{}'", sessionId, chargeBoxId);
+            return false;
         } finally {
             l.unlock();
         }

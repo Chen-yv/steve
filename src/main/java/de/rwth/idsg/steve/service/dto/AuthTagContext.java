@@ -16,31 +16,19 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-package de.rwth.idsg.steve.web.validation;
-
-import jakarta.validation.ConstraintValidator;
-import jakarta.validation.ConstraintValidatorContext;
-import java.util.regex.Pattern;
+package de.rwth.idsg.steve.service.dto;
 
 /**
- * Allowed characters are:
- * Upper or lower case letters, numbers and dot, colon, dash, underscore symbols.
- *
  * @author Sevket Goekay <sevketgokay@gmail.com>
- * @since 15.08.2014
+ * @since 25.07.2026
  */
-public class IdTagValidator implements ConstraintValidator<IdTag, String> {
+public enum AuthTagContext {
+    // these come from station via OCPP
+    StationAuth,
+    StationStartTx,
+    StationStopTx,
 
-    private static final String IDTAG_PATTERN = "^[a-zA-Z0-9.:_#-]{1,20}$";
-    private static final Pattern PATTERN = Pattern.compile(IDTAG_PATTERN);
-
-    @Override
-    public void initialize(IdTag idTag) {
-        // No-op
-    }
-
-    @Override
-    public boolean isValid(String string, ConstraintValidatorContext constraintValidatorContext) {
-        return string == null || PATTERN.matcher(string).matches();
-    }
+    // these come either from web UI or APIs of SteVe
+    LocalRemoteStart,
+    LocalReserveNow
 }

@@ -22,19 +22,30 @@ import de.rwth.idsg.steve.ocpp.ws.custom.WsSessionSelectStrategyEnum;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.support.NoOpTaskScheduler;
 import org.springframework.web.socket.adapter.jetty.JettyWebSocketSession;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class SessionContextStoreTest {
+
+    private static final Duration PING_INTERVAL = Duration.ofMinutes(15);
 
     @Test
     public void testAdd() {
         var store = new SessionContextStoreImpl(
             WsSessionSelectStrategyEnum.ALWAYS_LAST,
+            PING_INTERVAL,
             new NoOpTaskScheduler(),
             new FutureResponseContextStoreImpl()
         );
@@ -61,6 +72,7 @@ public class SessionContextStoreTest {
     public void testRemove() {
         var store = new SessionContextStoreImpl(
             WsSessionSelectStrategyEnum.ALWAYS_LAST,
+            PING_INTERVAL,
             new NoOpTaskScheduler(),
             new FutureResponseContextStoreImpl()
         );
@@ -102,6 +114,107 @@ public class SessionContextStoreTest {
             Assertions.assertEquals(0, sizeAfterRemove);
             Assertions.assertEquals(0, store.getSize("foo"));
         }
+    }
+
+    @Test
+    public void testCloseSession() throws Exception {
+        var store = new SessionContextStoreImpl(
+            WsSessionSelectStrategyEnum.ALWAYS_LAST,
+            PING_INTERVAL,
+            new NoOpTaskScheduler(),
+            new FutureResponseContextStoreImpl()
+        );
+
+        var session1 = getMockSession();
+        var session2 = getMockSession();
+
+        store.add("foo", session1);
+        store.add("foo", session2);
+
+        boolean closed = store.closeSession("foo", session1.getId());
+
+        Assertions.assertTrue(closed);
+        verify(session1).close();
+        verify(session2, never()).close();
+    }
+
+    @Test
+    public void testCloseSession_doesNotScanOtherChargeBoxIds() throws Exception {
+        var store = new SessionContextStoreImpl(
+            WsSessionSelectStrategyEnum.ALWAYS_LAST,
+            PING_INTERVAL,
+            new NoOpTaskScheduler(),
+            new FutureResponseContextStoreImpl()
+        );
+
+        var session = getMockSession();
+
+        store.add("foo", session);
+
+        boolean closed = store.closeSession("bar", session.getId());
+
+        Assertions.assertFalse(closed);
+        verify(session, never()).close();
+    }
+
+    @Test
+    public void testCloseSession_unknownSession() {
+        var store = new SessionContextStoreImpl(
+            WsSessionSelectStrategyEnum.ALWAYS_LAST,
+            PING_INTERVAL,
+            new NoOpTaskScheduler(),
+            new FutureResponseContextStoreImpl()
+        );
+
+        boolean closed = store.closeSession("foo", "unknown-session");
+
+        Assertions.assertFalse(closed);
+    }
+
+    @Test
+    public void testSessionIsPingedAtTheConfiguredInterval() {
+        var taskScheduler = Mockito.mock(TaskScheduler.class);
+        var store = new SessionContextStoreImpl(
+            WsSessionSelectStrategyEnum.ALWAYS_LAST,
+            Duration.ofSeconds(30),
+            taskScheduler,
+            new FutureResponseContextStoreImpl()
+        );
+
+        store.add("foo", getMockSession());
+
+        verify(taskScheduler).scheduleAtFixedRate(any(PingTask.class), any(Instant.class), eq(Duration.ofSeconds(30)));
+    }
+
+    /**
+     * A session added while pinging is disabled has no schedule to cancel on the way out.
+     */
+    @Test
+    public void testZeroIntervalDisablesPings() {
+        var taskScheduler = Mockito.mock(TaskScheduler.class);
+        var store = new SessionContextStoreImpl(
+            WsSessionSelectStrategyEnum.ALWAYS_LAST,
+            Duration.ZERO,
+            taskScheduler,
+            new FutureResponseContextStoreImpl()
+        );
+
+        var session = getMockSession();
+        store.add("foo", session);
+        store.remove("foo", session);
+
+        Assertions.assertEquals(0, store.getSize("foo"));
+        verifyNoInteractions(taskScheduler);
+    }
+
+    @Test
+    public void testRejectsSubSecondInterval() {
+        Assertions.assertThrows(IllegalArgumentException.class, () -> new SessionContextStoreImpl(
+            WsSessionSelectStrategyEnum.ALWAYS_LAST,
+            Duration.ofMillis(500),
+            new NoOpTaskScheduler(),
+            new FutureResponseContextStoreImpl()
+        ));
     }
 
     private static JettyWebSocketSession getMockSession() {

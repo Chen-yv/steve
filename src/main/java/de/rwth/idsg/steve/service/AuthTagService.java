@@ -18,11 +18,12 @@
  */
 package de.rwth.idsg.steve.service;
 
+import de.rwth.idsg.steve.service.dto.AuthTagContext;
 import ocpp.cs._2015._10.IdTagInfo;
 import org.jetbrains.annotations.Nullable;
 
 public interface AuthTagService {
 
-    IdTagInfo decideStatus(String idTag, boolean isStartTransactionReqContext,
-                           @Nullable String chargeBoxId, @Nullable Integer connectorId);
+    IdTagInfo decideStatus(String idTag, AuthTagContext authTagContext,
+                           String chargeBoxId, @Nullable Integer connectorId);
 }
