@@ -18,6 +18,8 @@
  */
 package de.rwth.idsg.steve.web.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import de.rwth.idsg.steve.ocpp.OcppVersion;
 import lombok.Builder;
 import lombok.Getter;
@@ -37,7 +39,10 @@ public final class OcppJsonStatus {
     private final String chargeBoxId;
     private final OcppVersion version;
 
+    @JsonProperty("connectedSince")
     private final DateTime connectedSinceDT;
+    @JsonIgnore
     private final String connectedSince;
+    @JsonIgnore
     private final String connectionDuration;
 }
