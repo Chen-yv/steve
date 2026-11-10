@@ -19,8 +19,12 @@
         </encoder>
     </appender>
 
+    <!-- Live log viewer: streams matching events to browser websockets -->
+    <appender name="LOG_STREAM" class="de.rwth.idsg.steve.web.log.LogStreamAppender" />
+
     <root level="INFO">
         <appender-ref ref="FILE" />
+        <appender-ref ref="LOG_STREAM" />
     </root>
 
     <!-- Disable the Jooq logo in logs -->

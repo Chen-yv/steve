@@ -70,6 +70,18 @@ public class WebSocketConfiguration implements WebSocketConfigurer {
         registry.addHandler(webSocketEndpoint, PATH_INFIX + "*")
                 .setHandshakeHandler(handshakeHandler)
                 .setAllowedOrigins("*");
+
+        // Live log viewer: browser websocket. Security comes from the surrounding
+        // /manager/** chain (ADMIN authority + session cookie).
+        // The stream can be quiet for a long time (no log events = no frames), so give it
+        // an explicit idle timeout instead of the Jetty default that closes idle
+        // connections after ~30s and forces the browser into a reconnect loop.
+        JettyRequestUpgradeStrategy logStrategy = new JettyRequestUpgradeStrategy();
+        logStrategy.addWebSocketConfigurer(configurable ->
+                configurable.setIdleTimeout(Duration.ofSeconds(60)));
+        registry.addHandler(new de.rwth.idsg.steve.web.log.LogStreamWebSocketHandler(), "/manager/log/stream")
+                .setHandshakeHandler(new DefaultHandshakeHandler(logStrategy))
+                .setAllowedOrigins("*");
     }
 
     /**
